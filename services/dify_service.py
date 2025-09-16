@@ -82,10 +82,9 @@ class DifyService:
                 final_filename = filename.rsplit('.', 1)[0] + '.docx'
                 logger.info(f"DOC转换完成，新文件名: {final_filename}")
             
-            # 准备multipart form data
+            # 准备multipart form data - 使用Dify API支持的字段
             data_json = {
                 'indexing_technique': 'high_quality',
-                'doc_form': 'hierarchical_model',  # 使用父子分段策略
                 'process_rule': {
                     'mode': 'custom',
                     'rules': {
@@ -96,16 +95,21 @@ class DifyService:
                         'segmentation': {
                             'separator': '\n',
                             'max_tokens': 1000
-                        },
-                        'parent_mode': 'paragraph',  # 段落召回模式
-                        'subchunk_segmentation': {
-                            'separator': '***',
-                            'max_tokens': 500,
-                            'chunk_overlap': 50
                         }
                     }
                 }
             }
+            
+            # 包含元数据以保持可追溯性
+            if metadata:
+                # 添加文档元数据
+                data_json['name'] = metadata.get('title', filename)
+                if 'file_id' in metadata:
+                    data_json['doc_metadata'] = {
+                        'file_id': metadata['file_id'],
+                        'analysis_result': metadata.get('analysis_result', {}),
+                        'source': 'OA_Document_Processor'
+                    }
             
             # 发送文件上传请求到Dify API
             url = f"{self.base_url}/v1/datasets/{self.dataset_id}/document/create-by-file"

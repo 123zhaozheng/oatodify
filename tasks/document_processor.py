@@ -147,6 +147,10 @@ def process_document(self, file_id: str):
         # 步骤3: 解析文档内容
         step_start = datetime.now()
         try:
+            # 用于存储最终处理的文件内容和名称（用于后续Dify上传）
+            final_file_content = decrypted_data
+            final_filename = file_info.imagefilename
+            
             # 如果是ZIP文件，先提取
             if file_info.is_zip or file_info.imagefilename.lower().endswith('.zip'):
                 extracted_files = decryption_service.extract_zip_files(decrypted_data)
@@ -154,6 +158,10 @@ def process_document(self, file_id: str):
                 if extracted_files:
                     largest_file = max(extracted_files.items(), key=lambda x: len(x[1]))
                     parse_result = document_parser.parse_document(largest_file[1], largest_file[0])
+                    # 更新为提取出的文件内容和名称，用于Dify上传
+                    final_file_content = largest_file[1]
+                    final_filename = largest_file[0]
+                    logger.info(f"ZIP文件处理：选择最大文件 {final_filename} ({len(final_file_content)} 字节) 用于知识库上传")
                 else:
                     raise Exception("ZIP文件中没有找到可处理的文档")
             else:
@@ -225,8 +233,9 @@ def process_document(self, file_id: str):
             step_start = datetime.now()
             try:
                 # 使用文件上传方式，支持DOC转DOCX和父子分段策略
+                # 对于ZIP文件使用提取出的文档内容，否则使用原始文件
                 dify_result = dify_service.add_document_to_knowledge_base_by_file(
-                    file_data, file_info.imagefilename, {
+                    final_file_content, final_filename, {
                         **metadata,
                         'analysis_result': analysis_result,
                         'file_id': file_id
@@ -247,6 +256,14 @@ def process_document(self, file_id: str):
                     log_processing_step(file_id, "add_to_kb", "failed", error_msg, step_duration)
                     file_info.error_count += 1
                     file_info.last_error = error_msg
+                
+            except NotImplementedError as e:
+                # DOC格式暂不支持，标记为跳过而不是失败
+                step_duration = (datetime.now() - step_start).seconds
+                skip_msg = f"DOC格式暂不支持: {str(e)}"
+                log_processing_step(file_id, "skip_doc", "success", skip_msg, step_duration)
+                update_file_status(file_id, ProcessingStatus.SKIPPED, skip_msg)
+                logger.warning(f"跳过DOC文件: {file_id} - {final_filename}")
                 
             except Exception as e:
                 step_duration = (datetime.now() - step_start).seconds
