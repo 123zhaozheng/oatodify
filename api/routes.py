@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, case
 from typing import List, Optional
 from datetime import datetime, timedelta
 import json
@@ -257,8 +257,8 @@ async def get_dashboard_statistics(db: Session = Depends(get_db)):
         today = datetime.now().date()
         today_stats = db.query(
             func.count(OAFileInfo.id).label('total'),
-            func.sum(func.case([(OAFileInfo.processing_status == ProcessingStatus.COMPLETED, 1)], else_=0)).label('completed'),
-            func.sum(func.case([(OAFileInfo.processing_status == ProcessingStatus.FAILED, 1)], else_=0)).label('failed')
+            func.coalesce(func.sum(case((OAFileInfo.processing_status == ProcessingStatus.COMPLETED, 1), else_=0)), 0).label('completed'),
+            func.coalesce(func.sum(case((OAFileInfo.processing_status == ProcessingStatus.FAILED, 1), else_=0)), 0).label('failed')
         ).filter(
             and_(
                 OAFileInfo.is_zw == True,
@@ -291,7 +291,7 @@ async def get_dashboard_statistics(db: Session = Depends(get_db)):
             "today_failed": today_stats.failed or 0,
             "error_files": error_files,
             "pending_approval": pending_approval,
-            "success_rate": round((today_stats.completed or 0) / max(today_stats.total or 1, 1) * 100, 2)
+            "success_rate": round((today_stats.completed or 0) / max(today_stats.total or 1, 1) * 100, 2) if (today_stats.total or 0) > 0 else 0
         }
         
     except Exception as e:
@@ -311,8 +311,8 @@ async def get_trend_statistics(
         daily_stats = db.query(
             func.date(OAFileInfo.processing_started_at).label('date'),
             func.count(OAFileInfo.id).label('total'),
-            func.sum(func.case([(OAFileInfo.processing_status == ProcessingStatus.COMPLETED, 1)], else_=0)).label('completed'),
-            func.sum(func.case([(OAFileInfo.processing_status == ProcessingStatus.FAILED, 1)], else_=0)).label('failed')
+            func.coalesce(func.sum(case((OAFileInfo.processing_status == ProcessingStatus.COMPLETED, 1), else_=0)), 0).label('completed'),
+            func.coalesce(func.sum(case((OAFileInfo.processing_status == ProcessingStatus.FAILED, 1), else_=0)), 0).label('failed')
         ).filter(
             and_(
                 OAFileInfo.is_zw == True,

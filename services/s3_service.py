@@ -2,7 +2,7 @@ import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 from config import settings
 import logging
-from typing import Optional, bytes
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
