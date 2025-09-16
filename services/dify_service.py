@@ -1,8 +1,12 @@
 import requests
 import json
 import logging
+import tempfile
+import os
 from typing import Dict, Optional
 from config import settings
+from docx import Document
+from docx.shared import Inches
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +25,37 @@ class DifyService:
                 'Content-Type': 'application/json'
             })
     
-    def add_document_to_knowledge_base(self, 
-                                     content: str, 
-                                     filename: str, 
-                                     metadata: Dict) -> Dict:
+    def convert_doc_to_docx(self, doc_content: bytes, original_filename: str) -> bytes:
         """
-        将文档添加到Dify知识库
+        将DOC格式转换为DOCX格式
+        注意：当前实现为占位符，实际生产环境需要安装LibreOffice或其他转换工具
         
         Args:
-            content: 文档内容
+            doc_content: DOC文件的二进制内容
+            original_filename: 原始文件名
+        
+        Returns:
+            bytes: DOCX格式的二进制数据
+        """
+        logger.warning(f"DOC格式转换为占位符实现，文件: {original_filename}")
+        logger.warning("生产环境请使用LibreOffice无头模式或其他DOC转换工具")
+        
+        # 临时解决方案：抛出异常，阻止DOC文件被错误处理
+        raise NotImplementedError(
+            f"DOC格式文件 {original_filename} 需要专门的转换工具。"
+            "请配置LibreOffice、unoconv或其他DOC转DOCX转换器。"
+            "当前不支持DOC格式文件上传到知识库。"
+        )
+    
+    def add_document_to_knowledge_base_by_file(self, 
+                                             file_content: bytes, 
+                                             filename: str, 
+                                             metadata: Dict) -> Dict:
+        """
+        通过文件上传将文档添加到Dify知识库（使用父子分段策略）
+        
+        Args:
+            file_content: 文件的二进制内容
             filename: 文件名
             metadata: 文档元数据
             
@@ -45,37 +71,81 @@ class DifyService:
                     'document_id': None
                 }
             
-            # 准备请求数据 - 根据Dify API文档格式
-            data = {
-                'name': filename,
-                'text': content,
+            # 检查文件格式，如果是DOC则转换为DOCX
+            file_extension = filename.lower().split('.')[-1]
+            final_content = file_content
+            final_filename = filename
+            
+            if file_extension == 'doc':
+                logger.info(f"检测到DOC格式文件，开始转换: {filename}")
+                final_content = self.convert_doc_to_docx(file_content, filename)
+                final_filename = filename.rsplit('.', 1)[0] + '.docx'
+                logger.info(f"DOC转换完成，新文件名: {final_filename}")
+            
+            # 准备multipart form data
+            data_json = {
                 'indexing_technique': 'high_quality',
+                'doc_form': 'hierarchical_model',  # 使用父子分段策略
                 'process_rule': {
-                    'mode': 'automatic'
+                    'mode': 'custom',
+                    'rules': {
+                        'pre_processing_rules': [
+                            {'id': 'remove_extra_spaces', 'enabled': True},
+                            {'id': 'remove_urls_emails', 'enabled': False}
+                        ],
+                        'segmentation': {
+                            'separator': '\n',
+                            'max_tokens': 1000
+                        },
+                        'parent_mode': 'paragraph',  # 段落召回模式
+                        'subchunk_segmentation': {
+                            'separator': '***',
+                            'max_tokens': 500,
+                            'chunk_overlap': 50
+                        }
+                    }
                 }
             }
             
-            # 发送请求到Dify API
-            url = f"{self.base_url}/v1/datasets/{self.dataset_id}/document/create-by-text"
+            # 发送文件上传请求到Dify API
+            url = f"{self.base_url}/v1/datasets/{self.dataset_id}/document/create-by-file"
             
-            logger.info(f"向Dify发送文档: {filename}")
+            logger.info(f"向Dify上传文件: {final_filename} (父子分段模式)")
             
-            response = self.session.post(url, json=data, timeout=30)
+            files = {
+                'file': (final_filename, final_content, 'application/octet-stream')
+            }
+            
+            form_data = {
+                'data': json.dumps(data_json)
+            }
+            
+            # 临时移除Content-Type头，让requests自动设置multipart边界
+            original_headers = self.session.headers.copy()
+            if 'Content-Type' in self.session.headers:
+                del self.session.headers['Content-Type']
+            
+            try:
+                response = self.session.post(url, files=files, data=form_data, timeout=60)
+            finally:
+                # 恢复原始headers
+                self.session.headers.update(original_headers)
             
             if response.status_code == 200 or response.status_code == 201:
                 result = response.json()
-                document_id = result.get('id') or result.get('document_id')
+                document_id = result.get('document', {}).get('id') or result.get('id')
                 
-                logger.info(f"文档成功添加到Dify知识库: {document_id}")
+                logger.info(f"文档成功上传到Dify知识库: {document_id} (父子分段模式)")
                 
                 return {
                     'success': True,
                     'document_id': document_id,
                     'error': None,
-                    'response': result
+                    'response': result,
+                    'segmentation_mode': 'hierarchical_model'
                 }
             else:
-                error_msg = f"Dify API请求失败: {response.status_code} - {response.text}"
+                error_msg = f"Dify文件上传失败: {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 
                 return {
@@ -86,7 +156,7 @@ class DifyService:
                 }
                 
         except requests.exceptions.Timeout:
-            error_msg = "Dify API请求超时"
+            error_msg = "Dify文件上传超时"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -94,7 +164,7 @@ class DifyService:
                 'document_id': None
             }
         except requests.exceptions.RequestException as e:
-            error_msg = f"Dify API网络错误: {str(e)}"
+            error_msg = f"Dify文件上传网络错误: {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -102,10 +172,39 @@ class DifyService:
                 'document_id': None
             }
         except Exception as e:
-            error_msg = f"添加文档到Dify失败: {str(e)}"
+            error_msg = f"文件上传到Dify失败: {str(e)}"
             logger.error(error_msg)
             import traceback
             traceback.print_exc()
+            return {
+                'success': False,
+                'error': error_msg,
+                'document_id': None
+            }
+    
+    def add_document_to_knowledge_base(self, 
+                                     content: str, 
+                                     filename: str, 
+                                     metadata: Dict) -> Dict:
+        """
+        将文档内容添加到Dify知识库（兼容性方法，推荐使用文件上传方式）
+        
+        Args:
+            content: 文档内容
+            filename: 文件名
+            metadata: 文档元数据
+            
+        Returns:
+            Dict: 添加结果
+        """
+        try:
+            # 将文本内容转换为临时文件进行上传
+            file_content = content.encode('utf-8')
+            return self.add_document_to_knowledge_base_by_file(file_content, filename, metadata)
+            
+        except Exception as e:
+            error_msg = f"文档内容上传失败: {str(e)}"
+            logger.error(error_msg)
             return {
                 'success': False,
                 'error': error_msg,

@@ -224,8 +224,9 @@ def process_document(self, file_id: str):
             # 高置信度，直接加入知识库
             step_start = datetime.now()
             try:
-                dify_result = dify_service.add_document_to_knowledge_base(
-                    content, file_info.imagefilename, {
+                # 使用文件上传方式，支持DOC转DOCX和父子分段策略
+                dify_result = dify_service.add_document_to_knowledge_base_by_file(
+                    file_data, file_info.imagefilename, {
                         **metadata,
                         'analysis_result': analysis_result,
                         'file_id': file_id
@@ -380,14 +381,20 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
                 # 重新解析分析结果
                 analysis_result = json.loads(file_info.ai_analysis_result or '{}')
                 
-                # 需要重新获取文档内容（简化实现，实际中可能需要缓存）
-                # 这里假设内容已经在之前的处理中保存了，实际实现时需要考虑如何获取
+                # 重新从S3下载文档内容进行知识库上传
+                try:
+                    file_data = s3_service.download_file(file_info.imagefileid, file_info.tokenkey)
+                    logger.info(f"重新下载文件成功，准备加入知识库: {file_info.imagefilename}")
+                except Exception as e:
+                    error_msg = f"重新下载文件失败: {str(e)}"
+                    logger.error(error_msg)
+                    update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                    log_processing_step(file_id, "manual_approve", "failed", error_msg)
+                    return {'success': False, 'error': error_msg}
                 
-                # TODO: 实现从缓存或重新处理获取文档内容的逻辑
-                content = "文档内容需要从缓存获取"  # 占位符
-                
-                dify_result = dify_service.add_document_to_knowledge_base(
-                    content, file_info.imagefilename, {
+                # 使用文件上传方式，支持DOC转DOCX和父子分段策略
+                dify_result = dify_service.add_document_to_knowledge_base_by_file(
+                    file_data, file_info.imagefilename, {
                         'analysis_result': analysis_result,
                         'file_id': file_id,
                         'manual_approved': True,
