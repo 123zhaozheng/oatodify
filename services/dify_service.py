@@ -45,23 +45,18 @@ class DifyService:
                     'document_id': None
                 }
             
-            # 准备请求数据
-            # TODO: 根据实际的Dify API文档调整请求格式
+            # 准备请求数据 - 根据Dify API文档格式
             data = {
                 'name': filename,
                 'text': content,
-                'metadata': {
-                    'source': 'oa_system',
-                    'file_type': metadata.get('file_type', 'unknown'),
-                    'content_length': len(content),
-                    'category': metadata.get('category', 'other'),
-                    'upload_time': metadata.get('upload_time', ''),
-                    **metadata
+                'indexing_technique': 'high_quality',
+                'process_rule': {
+                    'mode': 'automatic'
                 }
             }
             
             # 发送请求到Dify API
-            url = f"{self.base_url}/v1/datasets/{self.dataset_id}/documents"
+            url = f"{self.base_url}/v1/datasets/{self.dataset_id}/document/create-by-text"
             
             logger.info(f"向Dify发送文档: {filename}")
             
@@ -142,16 +137,37 @@ class DifyService:
                     'error': 'Dify API密钥未配置'
                 }
             
-            # TODO: 实现文档更新逻辑
-            # 这里需要根据实际的Dify API来实现
+            # 准备更新数据
+            data = {
+                'name': filename,
+                'text': content
+            }
+            
+            # 发送更新请求到Dify API
+            url = f"{self.base_url}/v1/datasets/{self.dataset_id}/documents/{document_id}/update_by_text"
             
             logger.info(f"更新Dify文档: {document_id}")
             
-            return {
-                'success': True,
-                'error': None,
-                'message': 'TODO: 实现文档更新功能'
-            }
+            response = self.session.post(url, json=data, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"文档更新成功: {document_id}")
+                
+                return {
+                    'success': True,
+                    'error': None,
+                    'response': result
+                }
+            else:
+                error_msg = f"Dify文档更新失败: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'status_code': response.status_code
+                }
             
         except Exception as e:
             error_msg = f"更新Dify文档失败: {str(e)}"
@@ -179,16 +195,30 @@ class DifyService:
                     'error': 'Dify API密钥未配置'
                 }
             
-            # TODO: 实现文档删除逻辑
-            # 这里需要根据实际的Dify API来实现
+            # 发送删除请求到Dify API
+            url = f"{self.base_url}/v1/datasets/{self.dataset_id}/documents/{document_id}"
             
             logger.info(f"删除Dify文档: {document_id}")
             
-            return {
-                'success': True,
-                'error': None,
-                'message': 'TODO: 实现文档删除功能'
-            }
+            response = self.session.delete(url, timeout=30)
+            
+            if response.status_code == 200 or response.status_code == 204:
+                logger.info(f"文档删除成功: {document_id}")
+                
+                return {
+                    'success': True,
+                    'error': None,
+                    'message': f'文档已删除: {document_id}'
+                }
+            else:
+                error_msg = f"Dify文档删除失败: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'status_code': response.status_code
+                }
             
         except Exception as e:
             error_msg = f"删除Dify文档失败: {str(e)}"
@@ -198,20 +228,56 @@ class DifyService:
                 'error': error_msg
             }
     
-    def check_api_connection(self) -> bool:
+    def check_api_connection(self) -> Dict:
         """检查Dify API连接状态"""
         try:
             if not self.api_key:
-                return False
+                return {
+                    'success': False,
+                    'error': 'Dify API密钥未配置'
+                }
             
-            # TODO: 实现API连接检查
-            # 这里需要根据实际的Dify API来实现
+            # 通过获取数据集列表来测试连接
+            url = f"{self.base_url}/v1/datasets?page=1&limit=1"
             
-            return True
+            response = self.session.get(url, timeout=10)
             
+            if response.status_code == 200:
+                logger.info("Dify API连接测试成功")
+                return {
+                    'success': True,
+                    'error': None,
+                    'message': 'API连接正常'
+                }
+            else:
+                error_msg = f"Dify API连接失败: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                return {
+                    'success': False,
+                    'error': error_msg
+                }
+            
+        except requests.exceptions.Timeout:
+            error_msg = "Dify API连接超时"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg
+            }
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Dify API网络错误: {str(e)}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg
+            }
         except Exception as e:
-            logger.error(f"Dify API连接检查失败: {e}")
-            return False
+            error_msg = f"Dify API连接检查失败: {str(e)}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg
+            }
 
 # 创建全局实例
 dify_service = DifyService()
