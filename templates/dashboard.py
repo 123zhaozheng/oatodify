@@ -200,107 +200,75 @@ def show_dashboard():
 def get_dashboard_stats():
     """获取仪表板统计数据"""
     try:
-        # TODO: 替换为实际的API调用
-        # response = requests.get("http://localhost:8000/api/v1/statistics/dashboard")
-        # return response.json()
-        
-        # 模拟数据
+        response = requests.get(
+            "http://localhost:8000/api/v1/statistics/dashboard",
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"获取统计数据失败: {str(e)}")
+        st.info("请检查后端服务是否正常运行")
+        # 返回空数据而不是模拟数据
         return {
-            'total_files': 1250,
-            'today_processed': 45,
-            'today_completed': 38,
-            'today_failed': 7,
-            'success_rate': 84.4,
-            'status_distribution': {
-                'pending': 125,
-                'completed': 856,
-                'failed': 89,
-                'awaiting_approval': 23,
-                'processing': 12,
-                'skipped': 145
-            },
-            'category_distribution': {
-                'contract': 234,
-                'report': 456,
-                'notice': 189,
-                'policy': 267,
-                'other': 104
-            },
-            'pending_approval': 23,
-            'error_files': 89
+            'total_files': 0,
+            'today_processed': 0,
+            'today_completed': 0,
+            'today_failed': 0,
+            'success_rate': 0,
+            'status_distribution': {},
+            'category_distribution': {},
+            'pending_approval': 0,
+            'error_files': 0
         }
     except Exception as e:
-        st.error(f"获取统计数据失败: {str(e)}")
+        st.error(f"处理统计数据失败: {str(e)}")
         return {}
 
 def get_trend_data(days=7):
     """获取趋势数据"""
     try:
-        # TODO: 替换为实际的API调用
-        # response = requests.get(f"http://localhost:8000/api/v1/statistics/trend?days={days}")
-        # return response.json()
-        
-        # 模拟数据
-        import random
-        from datetime import datetime, timedelta
-        
-        trend_data = []
-        for i in range(days):
-            date = (datetime.now() - timedelta(days=days-1-i)).date()
-            total = random.randint(30, 80)
-            completed = int(total * random.uniform(0.7, 0.9))
-            failed = total - completed
-            
-            trend_data.append({
-                'date': date.isoformat(),
-                'total': total,
-                'completed': completed,
-                'failed': failed
-            })
-        
-        return {'trend_data': trend_data}
-    except Exception as e:
+        response = requests.get(
+            f"http://localhost:8000/api/v1/statistics/trend?days={days}",
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
         st.error(f"获取趋势数据失败: {str(e)}")
+        st.info("请检查后端服务是否正常运行")
+        # 返回空数据
+        return {'trend_data': []}
+    except Exception as e:
+        st.error(f"处理趋势数据失败: {str(e)}")
         return {}
 
 def trigger_batch_process():
     """触发批量处理"""
     try:
-        # TODO: 替换为实际的API调用
-        # response = requests.post("http://localhost:8000/api/v1/files/batch-process?limit=20")
-        # return response.json()
-        
-        # 模拟返回
-        return {'success': True, 'message': '批量处理任务已提交'}
+        response = requests.post(
+            "http://localhost:8000/api/v1/files/batch-process?limit=20",
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {'success': False, 'error': f'API调用失败: {str(e)}'}
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
 def show_recent_activity():
     """显示最近活动"""
     try:
-        # 模拟最近活动数据
-        activities = [
-            {"time": "2 分钟前", "action": "文档处理完成", "file": "合同-20240901.pdf", "status": "success"},
-            {"time": "5 分钟前", "action": "AI分析完成", "file": "报告-季度总结.docx", "status": "pending"},
-            {"time": "8 分钟前", "action": "文档下载失败", "file": "政策-新规定.doc", "status": "error"},
-            {"time": "12 分钟前", "action": "人工审核通过", "file": "通知-重要事项.pdf", "status": "success"},
-            {"time": "15 分钟前", "action": "批量处理开始", "file": "20个文档", "status": "info"}
-        ]
+        # TODO: 实现真实的活动日志API端点
+        # 例如: GET /api/v1/activity/recent 
+        # 目前显示占位信息，避免用户混淆
         
-        for activity in activities[:5]:  # 只显示最近5条
-            status_icon = {
-                'success': '✅',
-                'pending': '⏳',
-                'error': '❌',
-                'info': 'ℹ️'
-            }.get(activity['status'], 'ℹ️')
-            
-            st.markdown(
-                f"{status_icon} **{activity['action']}** - {activity['file']} - *{activity['time']}*"
-            )
+        st.info("📝 最新活动日志功能开发中...")
+        st.caption("将显示文档处理、审核、错误等实时活动记录")
         
-        if st.button("查看更多活动", key="more_activity"):
-            st.info("完整活动日志功能待实现")
+        if st.button("查看处理日志", key="view_processing_logs"):
+            st.info("完整活动日志功能待实现 - 需要后端 /api/v1/activity/recent 接口")
             
     except Exception as e:
         st.error(f"加载活动日志失败: {str(e)}")

@@ -332,9 +332,8 @@ def mask_sensitive_info(text, mask_char="*", show_last=4):
 def check_database_connection():
     """检查数据库连接"""
     try:
-        # TODO: 实现实际的数据库连接检查
-        # 可以调用后端API或直接连接数据库
-        return True
+        response = requests.get("http://localhost:8000/health", timeout=5)
+        return response.status_code == 200
     except Exception:
         return False
 
@@ -400,12 +399,20 @@ def test_ai_analysis():
 def get_ai_analysis_stats():
     """获取AI分析统计"""
     try:
-        # TODO: 从数据库获取AI分析统计
-        return {
-            'total_analyzed': 856,
-            'avg_confidence': 72.5,
-            'pass_rate': 68.2
-        }
+        # 从仪表板API获取统计数据
+        response = requests.get("http://localhost:8000/api/v1/statistics/dashboard", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            total_files = data.get('total_files', 0)
+            completed = data.get('today_completed', 0)
+            total_processed = data.get('today_processed', 1)  # 避免除零
+            
+            return {
+                'total_analyzed': total_files,
+                'avg_confidence': 0,  # TODO: 需要新的API接口
+                'pass_rate': (completed / max(total_processed, 1)) * 100
+            }
+        return None
     except Exception:
         return None
 
@@ -432,15 +439,36 @@ def get_knowledge_base_stats():
 def get_system_health():
     """获取系统健康状态"""
     try:
-        # TODO: 实现系统健康检查
-        # 检查各个服务的状态
+        # 检查API服务器
+        api_healthy = False
+        try:
+            response = requests.get("http://localhost:8000/health", timeout=5)
+            api_healthy = response.status_code == 200
+        except:
+            pass
+        
+        # 检查数据库
+        db_healthy = check_database_connection()
+        
+        # 检查Redis
+        redis_healthy = check_redis_connection()
+        
+        # 简单的健康评估
+        healthy_services = sum([api_healthy, db_healthy, redis_healthy])
+        if healthy_services >= 2:
+            overall = 'healthy'
+        elif healthy_services >= 1:
+            overall = 'warning'
+        else:
+            overall = 'error'
+            
         return {
-            'overall': 'healthy',
-            'api_server': True,
-            'celery_worker': True,
-            'database': True,
-            'redis': True,
-            's3': True
+            'overall': overall,
+            'api_server': api_healthy,
+            'celery_worker': False,  # TODO: 实现Celery检查
+            'database': db_healthy,
+            'redis': redis_healthy,
+            's3': False  # TODO: 实现S3检查
         }
     except Exception:
         return {

@@ -208,118 +208,55 @@ def show_file_detail(file_id, filename):
 def get_pending_approval_files():
     """获取待审核文档列表"""
     try:
-        # TODO: 替换为实际的API调用
-        # response = requests.get("http://localhost:8000/api/v1/files/?status=awaiting_approval&is_zw=true")
-        # return response.json()['items']
-        
-        # 模拟数据
-        import random
-        files = []
-        for i in range(5):
-            confidence = random.randint(40, 75)
-            files.append({
-                'imagefileid': f'FILE_{1000 + i}',
-                'filename': f'待审核文档_{i+1}.pdf',
-                'file_type': 'pdf',
-                'business_category': random.choice(['contract', 'report', 'policy']),
-                'filesize': random.randint(50000, 500000),
-                'ai_confidence_score': confidence,
-                'ai_analysis': {
-                    'category': random.choice(['contract', 'report', 'policy']),
-                    'quality_score': random.randint(60, 85),
-                    'completeness': random.choice(['complete', 'partial']),
-                    'summary': f'这是一个关于业务{i+1}的文档摘要，内容涉及多个方面的详细说明。',
-                    'key_topics': [f'主题{j+1}' for j in range(3)],
-                    'reasons': [
-                        f'置信度为{confidence}%，需要人工审核',
-                        '文档结构较为完整',
-                        '内容具有一定价值'
-                    ]
-                }
-            })
-        return files
-        
-    except Exception as e:
+        response = requests.get(
+            "http://localhost:8000/api/v1/files/?status=awaiting_approval&is_zw=true",
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get('items', [])
+    except requests.exceptions.RequestException as e:
         st.error(f"获取待审核文档失败: {str(e)}")
+        st.info("请检查后端服务是否正常运行")
+        return []
+    except Exception as e:
+        st.error(f"处理待审核文档数据失败: {str(e)}")
         return []
 
 def submit_approval(file_id, approved, comment):
     """提交审核结果"""
     try:
-        # TODO: 替换为实际的API调用
-        # data = {
-        #     'approved': approved,
-        #     'comment': comment
-        # }
-        # response = requests.post(f"http://localhost:8000/api/v1/files/{file_id}/approve", json=data)
-        # return response.json()
-        
-        # 模拟返回
-        return {'success': True, 'message': '审核提交成功'}
-        
+        data = {
+            'approved': approved,
+            'comment': comment
+        }
+        response = requests.post(
+            f"http://localhost:8000/api/v1/files/{file_id}/approve",
+            json=data,
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {'success': False, 'error': f'API调用失败: {str(e)}'}
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
 def get_file_detail(file_id):
     """获取文件详情"""
     try:
-        # TODO: 替换为实际的API调用
-        # response = requests.get(f"http://localhost:8000/api/v1/files/{file_id}")
-        # return response.json()
-        
-        # 模拟数据
-        import random
-        return {
-            'imagefileid': file_id,
-            'filename': f'详细文档_{file_id}.pdf',
-            'file_type': 'pdf',
-            'business_category': 'contract',
-            'filesize': 245678,
-            'processing_status': 'awaiting_approval',
-            'processing_message': '等待人工审核',
-            'error_count': 0,
-            'processing_started_at': '2024-09-16 10:30:00',
-            'ai_analysis': {
-                'category': 'contract',
-                'quality_score': 75,
-                'completeness': 'complete',
-                'summary': '这是一个详细的合同文档...',
-                'key_topics': ['合同条款', '责任义务', '付款方式'],
-                'reasons': ['置信度中等', '需要人工确认']
-            },
-            'processing_logs': [
-                {
-                    'step': 'download',
-                    'status': 'success',
-                    'message': '下载成功',
-                    'duration_seconds': 5,
-                    'created_at': '2024-09-16 10:30:05'
-                },
-                {
-                    'step': 'decrypt',
-                    'status': 'success',
-                    'message': '解密成功',
-                    'duration_seconds': 2,
-                    'created_at': '2024-09-16 10:30:07'
-                },
-                {
-                    'step': 'parse',
-                    'status': 'success',
-                    'message': '解析成功',
-                    'duration_seconds': 3,
-                    'created_at': '2024-09-16 10:30:10'
-                },
-                {
-                    'step': 'analyze',
-                    'status': 'success',
-                    'message': 'AI分析完成',
-                    'duration_seconds': 8,
-                    'created_at': '2024-09-16 10:30:18'
-                }
-            ]
-        }
-        
+        response = requests.get(
+            f"http://localhost:8000/api/v1/files/{file_id}",
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"获取文件详情失败: {str(e)}")
+        st.info("请检查后端服务是否正常运行")
+        return {}
     except Exception as e:
+        st.error(f"处理文件详情数据失败: {str(e)}")
         return {}
 
 def format_file_size(size_bytes):
