@@ -28,9 +28,11 @@ app.conf.update(
     timezone='Asia/Shanghai',
     enable_utc=True,
     task_routes={
-        'process_document': {'queue': 'document_processing'},
-        'batch_process_documents': {'queue': 'batch_processing'},
-    }
+        'tasks.document_processor.process_document': {'queue': 'document_processing'},
+        'tasks.document_processor.batch_process_documents': {'queue': 'batch_processing'},
+        'tasks.document_processor.approve_document': {'queue': 'document_processing'},
+    },
+    task_default_queue='document_processing'
 )
 
 def log_processing_step(file_id: str, step: str, status: str, message: str, duration: int = None):
