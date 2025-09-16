@@ -16,6 +16,12 @@ class S3Service:
     def _init_client(self):
         """初始化S3客户端"""
         try:
+            # 检查S3配置是否完整
+            if not settings.s3_access_key or not settings.s3_secret_key:
+                logger.warning("S3凭证未配置，S3服务不可用")
+                self.client = None
+                return
+            
             session = boto3.Session(
                 aws_access_key_id=settings.s3_access_key,
                 aws_secret_access_key=settings.s3_secret_key,
@@ -24,17 +30,22 @@ class S3Service:
             
             client_kwargs = {}
             if settings.s3_endpoint_url:
-                client_kwargs['endpoint_url'] = settings.s3_endpoint_url
+                # 确保endpoint URL格式正确
+                endpoint_url = settings.s3_endpoint_url.strip()
+                if not endpoint_url.startswith('http'):
+                    endpoint_url = f'https://{endpoint_url}'
+                client_kwargs['endpoint_url'] = endpoint_url
+                logger.info(f"使用自定义S3端点: {endpoint_url}")
             
             self.client = session.client('s3', **client_kwargs)
             logger.info("S3客户端初始化成功")
             
         except NoCredentialsError:
-            logger.error("S3凭证未配置")
-            raise
+            logger.warning("S3凭证未配置，S3服务不可用")
+            self.client = None
         except Exception as e:
-            logger.error(f"S3客户端初始化失败: {e}")
-            raise
+            logger.warning(f"S3客户端初始化失败: {e}, S3服务不可用")
+            self.client = None
     
     def download_file(self, file_key: str, token_key: Optional[str] = None) -> bytes:
         """
@@ -47,6 +58,10 @@ class S3Service:
         Returns:
             文件的二进制数据
         """
+        if not self.client:
+            logger.error("S3客户端未初始化，无法下载文件")
+            raise RuntimeError("S3服务不可用")
+            
         try:
             # 构建下载参数
             download_params = {
@@ -86,6 +101,10 @@ class S3Service:
     
     def check_file_exists(self, file_key: str) -> bool:
         """检查文件是否存在"""
+        if not self.client:
+            logger.error("S3客户端未初始化，无法检查文件")
+            return False
+            
         try:
             self.client.head_object(Bucket=settings.s3_bucket_name, Key=file_key)
             return True
@@ -94,6 +113,10 @@ class S3Service:
     
     def get_file_info(self, file_key: str) -> dict:
         """获取文件信息"""
+        if not self.client:
+            logger.error("S3客户端未初始化，无法获取文件信息")
+            raise RuntimeError("S3服务不可用")
+            
         try:
             response = self.client.head_object(Bucket=settings.s3_bucket_name, Key=file_key)
             return {
