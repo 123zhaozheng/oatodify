@@ -114,7 +114,7 @@ def process_document(self, file_id: str):
             error_msg = f"下载失败: {str(e)}"
             log_processing_step(file_id, "download", "failed", error_msg, step_duration)
             update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
-            file_info.error_count += 1
+            file_info.error_count = (file_info.error_count or 0) + 1
             file_info.last_error = error_msg
             db.commit()
             raise
@@ -137,7 +137,7 @@ def process_document(self, file_id: str):
             error_msg = f"解密失败: {str(e)}"
             log_processing_step(file_id, "decrypt", "failed", error_msg, step_duration)
             update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
-            file_info.error_count += 1
+            file_info.error_count = (file_info.error_count or 0) + 1
             file_info.last_error = error_msg
             db.commit()
             raise
@@ -173,7 +173,7 @@ def process_document(self, file_id: str):
                 error_msg = f"解析失败: {parse_result['error']}"
                 log_processing_step(file_id, "parse", "failed", error_msg, step_duration)
                 update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
-                file_info.error_count += 1
+                file_info.error_count = (file_info.error_count or 0) + 1
                 file_info.last_error = error_msg
                 db.commit()
                 return {'success': False, 'error': error_msg}
@@ -188,7 +188,7 @@ def process_document(self, file_id: str):
             error_msg = f"解析失败: {str(e)}"
             log_processing_step(file_id, "parse", "failed", error_msg, step_duration)
             update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
-            file_info.error_count += 1
+            file_info.error_count = (file_info.error_count or 0) + 1
             file_info.last_error = error_msg
             db.commit()
             raise
@@ -254,7 +254,7 @@ def process_document(self, file_id: str):
                     error_msg = f"加入知识库失败: {dify_result['error']}"
                     update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
                     log_processing_step(file_id, "add_to_kb", "failed", error_msg, step_duration)
-                    file_info.error_count += 1
+                    file_info.error_count = (file_info.error_count or 0) + 1
                     file_info.last_error = error_msg
                 
             except NotImplementedError as e:
@@ -270,7 +270,7 @@ def process_document(self, file_id: str):
                 error_msg = f"加入知识库异常: {str(e)}"
                 log_processing_step(file_id, "add_to_kb", "failed", error_msg, step_duration)
                 update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
-                file_info.error_count += 1
+                file_info.error_count = (file_info.error_count or 0) + 1
                 file_info.last_error = error_msg
         
         elif analysis_result['suitable_for_kb'] and analysis_result['confidence_score'] >= 40:
@@ -304,7 +304,7 @@ def process_document(self, file_id: str):
         traceback.print_exc()
         
         if db and file_info:
-            file_info.error_count += 1
+            file_info.error_count = (file_info.error_count or 0) + 1
             file_info.last_error = str(e)
             update_file_status(file_id, ProcessingStatus.FAILED, f"未知错误: {str(e)}")
             db.commit()
