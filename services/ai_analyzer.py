@@ -3,6 +3,7 @@ import os
 from typing import Dict, Optional
 import logging
 from openai import OpenAI
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -11,18 +12,27 @@ class AIAnalyzer:
     
     def __init__(self):
         self.client = None
+        self.model_name = settings.openai_model_name
         self._init_client()
     
     def _init_client(self):
         """初始化OpenAI客户端"""
         try:
-            api_key = os.getenv("OPENAI_API_KEY")
+            api_key = settings.openai_api_key
             if not api_key:
                 logger.error("未配置OPENAI_API_KEY")
                 return
-                
-            self.client = OpenAI(api_key=api_key)
-            logger.info("OpenAI客户端初始化成功")
+            
+            # 构建客户端参数
+            client_kwargs = {"api_key": api_key}
+            
+            # 如果配置了自定义base_url，则使用自定义URL
+            if settings.openai_base_url:
+                client_kwargs["base_url"] = settings.openai_base_url
+                logger.info(f"使用自定义OpenAI URL: {settings.openai_base_url}")
+            
+            self.client = OpenAI(**client_kwargs)
+            logger.info(f"OpenAI客户端初始化成功，模型: {self.model_name}")
             
         except Exception as e:
             logger.error(f"OpenAI客户端初始化失败: {e}")
@@ -51,7 +61,7 @@ class AIAnalyzer:
             # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
             # do not change this unless explicitly requested by the user
             response = self.client.chat.completions.create(
-                model="gpt-5",
+                model=self.model_name,
                 messages=[
                     {
                         "role": "system",
@@ -84,7 +94,7 @@ class AIAnalyzer:
                 "quality_score": max(0, min(100, result.get("quality_score", 50))),
                 "completeness": result.get("completeness", "unknown"),
                 "analysis_method": "ai",
-                "model_version": "gpt-5"
+                "model_version": self.model_name
             }
             
             logger.info(f"AI分析完成，适合知识库: {analysis_result['suitable_for_kb']}, "

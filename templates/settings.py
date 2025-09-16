@@ -161,17 +161,61 @@ def show_ai_settings():
     """显示AI配置"""
     st.subheader("🤖 AI分析配置")
     
+    # 配置输入区域
+    st.markdown("### 🔧 OpenAI配置")
+    with st.expander("配置OpenAI参数", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.text_input(
+                "API Key",
+                value=mask_sensitive_info(os.getenv("OPENAI_API_KEY", "")),
+                help="OpenAI API密钥",
+                disabled=True,
+                key="openai_key_display"
+            )
+            
+            openai_base_url = st.text_input(
+                "自定义Base URL (可选)",
+                value=os.getenv("OPENAI_BASE_URL", ""),
+                help="如果使用自定义OpenAI服务，请输入完整的base URL，例如: https://api.openai.com/v1",
+                placeholder="https://your-custom-openai-api.com/v1"
+            )
+            
+        with col2:
+            openai_model = st.text_input(
+                "模型名称",
+                value=os.getenv("OPENAI_MODEL_NAME", "gpt-4"),
+                help="要使用的模型名称，例如: gpt-4, gpt-3.5-turbo, 或自定义模型名称",
+                placeholder="gpt-4"
+            )
+            
+            st.info("💡 配置提示：\n"
+                   "- 官方OpenAI：留空Base URL，使用默认模型名称\n"
+                   "- 自定义服务：填写完整Base URL和对应模型名称\n"
+                   "- 配置修改需要重启应用生效")
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**OpenAI配置**")
+        st.markdown("**当前配置状态**")
         
         openai_key = os.getenv("OPENAI_API_KEY")
+        openai_base_url_current = os.getenv("OPENAI_BASE_URL")
+        openai_model_current = os.getenv("OPENAI_MODEL_NAME", "gpt-4")
+        
         if openai_key:
             st.success("✅ OpenAI API密钥已配置")
             st.code(f"API Key: {mask_sensitive_info(openai_key)}")
         else:
             st.error("❌ OpenAI API密钥未配置")
+            
+        if openai_base_url_current:
+            st.info(f"🔗 自定义Base URL: {openai_base_url_current}")
+        else:
+            st.info("🔗 使用官方OpenAI API")
+            
+        st.info(f"🤖 当前模型: {openai_model_current}")
         
         # 测试OpenAI连接
         if st.button("🧪 测试AI分析", key="test_openai"):
@@ -195,10 +239,15 @@ def show_ai_settings():
             st.metric("总分析次数", ai_stats.get('total_analyzed', 0))
             st.metric("平均置信度", f"{ai_stats.get('avg_confidence', 0):.1f}%")
             st.metric("通过率", f"{ai_stats.get('pass_rate', 0):.1f}%")
+        else:
+            st.info("暂无统计数据")
         
-        st.markdown("**模型信息**")
-        st.info("🚀 当前使用模型: GPT-5")
-        st.caption("GPT-5 于2025年8月7日发布，是最新的AI模型")
+        st.markdown("**环境变量配置说明**")
+        st.code("""# 在环境变量中设置：
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com/v1"  # 可选
+export OPENAI_MODEL_NAME="gpt-4"  # 可选，默认gpt-4
+        """, language="bash")
 
 def show_dify_settings():
     """显示Dify集成配置"""
@@ -382,16 +431,30 @@ def get_s3_storage_stats():
 def test_ai_analysis():
     """测试AI分析功能"""
     try:
-        # TODO: 实现AI分析测试
+        from services.ai_analyzer import ai_analyzer
+        
         # 使用一个简单的测试文本进行分析
+        test_content = """
+        这是一个测试文档，用于验证AI分析功能是否正常工作。
+        文档包含了一些基本的业务信息和操作指南。
+        该文档用于测试系统的文档分析能力。
+        """
+        
+        test_metadata = {
+            'file_type': 'txt',
+            'pages': 1
+        }
+        
+        # 执行AI分析
+        result = ai_analyzer.analyze_document_content(
+            content=test_content,
+            filename="test_document.txt",
+            metadata=test_metadata
+        )
+        
         return {
             'success': True,
-            'analysis_result': {
-                'suitable_for_kb': True,
-                'confidence_score': 85,
-                'category': 'test',
-                'summary': 'AI分析测试成功'
-            }
+            'analysis_result': result
         }
     except Exception as e:
         return {'success': False, 'error': str(e)}

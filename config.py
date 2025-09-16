@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     
     # OpenAI配置
     openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    openai_base_url: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_BASE_URL"))
+    openai_model_name: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL_NAME", "gpt-4"))
     
     # Dify配置
     dify_api_key: str = Field(default_factory=lambda: os.getenv("DIFY_API_KEY", ""))
