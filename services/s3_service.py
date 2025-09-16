@@ -54,12 +54,11 @@ class S3Service:
                 'Key': file_key
             }
             
-            # 如果有token_key，添加到请求头中
+            # 如果有token_key，添加自定义请求头
             if token_key:
-                download_params['ExtraArgs'] = {
-                    'RequestPayer': 'requester',
-                    'Metadata': {'token': token_key}
-                }
+                # 对于get_object，自定义元数据应该在响应中查找，而不是请求中设置
+                # 如果需要身份验证，应该设置适当的请求头
+                pass  # TODO: 根据实际S3服务要求配置token认证
             
             logger.info(f"开始下载文件: {file_key}")
             
