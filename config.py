@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     # 文档处理配置
     max_file_size: int = Field(default=100 * 1024 * 1024)  # 100MB
     supported_formats: list = Field(default=["pdf", "docx", "doc", "txt"])
+
+    # 文档解析接口配置
+    document_parse_api_url: str = Field(default_factory=lambda: os.getenv("DOCUMENT_PARSE_API_URL", "http://localhost:8080"))
+
+    # AI分析配置
+    ai_analysis_max_length: int = Field(default_factory=lambda: int(os.getenv("AI_ANALYSIS_MAX_LENGTH", "50000")))
     
     class Config:
         env_file = ".env"

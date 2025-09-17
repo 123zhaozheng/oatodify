@@ -7,7 +7,7 @@ from database import get_db_session
 from models import OAFileInfo, ProcessingLog, ProcessingStatus
 from services.s3_service import s3_service
 from services.decryption_service import decryption_service
-from services.document_parser import document_parser
+from services.api_document_parser import api_document_parser
 from services.ai_analyzer import ai_analyzer
 from services.dify_service import dify_service
 from config import settings
@@ -157,7 +157,7 @@ def process_document(self, file_id: str):
                 # 选择最大的文档文件进行处理
                 if extracted_files:
                     largest_file = max(extracted_files.items(), key=lambda x: len(x[1]))
-                    parse_result = document_parser.parse_document(largest_file[1], largest_file[0])
+                    parse_result = api_document_parser.parse_document(largest_file[1], largest_file[0])
                     # 更新为提取出的文件内容和名称，用于Dify上传
                     final_file_content = largest_file[1]
                     final_filename = largest_file[0]
@@ -165,7 +165,7 @@ def process_document(self, file_id: str):
                 else:
                     raise Exception("ZIP文件中没有找到可处理的文档")
             else:
-                parse_result = document_parser.parse_document(decrypted_data, file_info.imagefilename)
+                parse_result = api_document_parser.parse_document(decrypted_data, file_info.imagefilename)
             
             step_duration = (datetime.now() - step_start).seconds
             
@@ -232,10 +232,9 @@ def process_document(self, file_id: str):
             # 高置信度，直接加入知识库
             step_start = datetime.now()
             try:
-                # 使用文件上传方式，支持DOC转DOCX和父子分段策略
-                # 对于ZIP文件使用提取出的文档内容，否则使用原始文件
-                dify_result = dify_service.add_document_to_knowledge_base_by_file(
-                    final_file_content, final_filename, {
+                # 使用文本内容直接传入Dify，使用父子分段策略
+                dify_result = dify_service.add_document_to_knowledge_base_by_text(
+                    content, final_filename, {
                         **metadata,
                         'analysis_result': analysis_result,
                         'file_id': file_id
@@ -256,14 +255,6 @@ def process_document(self, file_id: str):
                     log_processing_step(file_id, "add_to_kb", "failed", error_msg, step_duration)
                     file_info.error_count = (file_info.error_count or 0) + 1
                     file_info.last_error = error_msg
-                
-            except NotImplementedError as e:
-                # DOC格式暂不支持，标记为跳过而不是失败
-                step_duration = (datetime.now() - step_start).seconds
-                skip_msg = f"DOC格式暂不支持: {str(e)}"
-                log_processing_step(file_id, "skip_doc", "success", skip_msg, step_duration)
-                update_file_status(file_id, ProcessingStatus.SKIPPED, skip_msg)
-                logger.warning(f"跳过DOC文件: {file_id} - {final_filename}")
                 
             except Exception as e:
                 step_duration = (datetime.now() - step_start).seconds
@@ -397,21 +388,40 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
             try:
                 # 重新解析分析结果
                 analysis_result = json.loads(file_info.ai_analysis_result or '{}')
-                
-                # 重新从S3下载文档内容进行知识库上传
+
+                # 重新从S3下载文档内容并解析
                 try:
                     file_data = s3_service.download_file(file_info.imagefileid, file_info.tokenkey)
-                    logger.info(f"重新下载文件成功，准备加入知识库: {file_info.imagefilename}")
+                    logger.info(f"重新下载文件成功，准备解析并加入知识库: {file_info.imagefilename}")
+
+                    # 解密文档
+                    if file_info.asecode:
+                        decrypted_data = decryption_service.decrypt_binary_data(file_data, file_info.asecode)
+                    else:
+                        decrypted_data = file_data
+
+                    # 解析文档内容
+                    parse_result = api_document_parser.parse_document(decrypted_data, file_info.imagefilename)
+
+                    if not parse_result['success']:
+                        error_msg = f"重新解析文档失败: {parse_result['error']}"
+                        logger.error(error_msg)
+                        update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                        log_processing_step(file_id, "manual_approve", "failed", error_msg)
+                        return {'success': False, 'error': error_msg}
+
+                    content = parse_result['content']
+
                 except Exception as e:
-                    error_msg = f"重新下载文件失败: {str(e)}"
+                    error_msg = f"重新处理文件失败: {str(e)}"
                     logger.error(error_msg)
                     update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
                     log_processing_step(file_id, "manual_approve", "failed", error_msg)
                     return {'success': False, 'error': error_msg}
-                
-                # 使用文件上传方式，支持DOC转DOCX和父子分段策略
-                dify_result = dify_service.add_document_to_knowledge_base_by_file(
-                    file_data, file_info.imagefilename, {
+
+                # 使用文本内容传入方式，支持父子分段策略
+                dify_result = dify_service.add_document_to_knowledge_base_by_text(
+                    content, file_info.imagefilename, {
                         'analysis_result': analysis_result,
                         'file_id': file_id,
                         'manual_approved': True,

@@ -186,26 +186,137 @@ class DifyService:
                 'document_id': None
             }
     
-    def add_document_to_knowledge_base(self, 
-                                     content: str, 
-                                     filename: str, 
-                                     metadata: Dict) -> Dict:
+    def add_document_to_knowledge_base_by_text(self,
+                                             content: str,
+                                             filename: str,
+                                             metadata: Dict) -> Dict:
         """
-        将文档内容添加到Dify知识库（兼容性方法，推荐使用文件上传方式）
-        
+        通过文本内容将文档添加到Dify知识库（使用create-by-text接口）
+
         Args:
             content: 文档内容
             filename: 文件名
             metadata: 文档元数据
-            
+
         Returns:
             Dict: 添加结果
         """
         try:
-            # 将文本内容转换为临时文件进行上传
-            file_content = content.encode('utf-8')
-            return self.add_document_to_knowledge_base_by_file(file_content, filename, metadata)
-            
+            if not self.api_key:
+                logger.error("Dify API密钥未配置")
+                return {
+                    'success': False,
+                    'error': 'Dify API密钥未配置',
+                    'document_id': None
+                }
+
+            # 准备数据，根据Dify API文档配置
+            data = {
+                'name': filename,
+                'text': content,
+                'indexing_technique': 'high_quality',  # 高质量索引
+                'doc_form': 'hierarchical_model',      # 父子分段模式
+                'process_rule': {
+                    'mode': 'custom',  # 自定义模式
+                    'rules': {
+                        'pre_processing_rules': [],  # 暂不进行预处理
+                        'segmentation': {
+                            'separator': '@@@@@',  # 父分段标识符
+                            'max_tokens': 2000     # 父分段最大长度
+                        },
+                        'parent_mode': 'paragraph',  # 段落召回
+                        'subchunk_segmentation': {
+                            'separator': '\n',   # 子分段标识符
+                            'max_tokens': 500,   # 子分段最大长度
+                            'chunk_overlap': 50  # 重叠50token
+                        }
+                    }
+                }
+            }
+
+            # 添加元数据
+            if metadata and 'file_id' in metadata:
+                # 在文档名称中包含元数据信息，便于追溯
+                data['name'] = f"{filename} (ID: {metadata['file_id']})"
+
+            # 发送请求到Dify API
+            url = f"{self.base_url}/v1/datasets/{self.dataset_id}/document/create-by-text"
+
+            logger.info(f"通过文本创建Dify文档: {filename} (父子分段模式)")
+            logger.info(f"文本长度: {len(content)} 字符")
+
+            response = self.session.post(url, json=data, timeout=60)
+
+            if response.status_code == 200 or response.status_code == 201:
+                result = response.json()
+                document_id = result.get('document', {}).get('id') or result.get('id')
+
+                logger.info(f"文档通过文本成功创建到Dify知识库: {document_id}")
+
+                return {
+                    'success': True,
+                    'document_id': document_id,
+                    'error': None,
+                    'response': result,
+                    'segmentation_mode': 'hierarchical_model'
+                }
+            else:
+                error_msg = f"Dify文本创建失败: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'document_id': None,
+                    'status_code': response.status_code
+                }
+
+        except requests.exceptions.Timeout:
+            error_msg = "Dify文本创建超时"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg,
+                'document_id': None
+            }
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Dify文本创建网络错误: {str(e)}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg,
+                'document_id': None
+            }
+        except Exception as e:
+            error_msg = f"文本创建到Dify失败: {str(e)}"
+            logger.error(error_msg)
+            import traceback
+            traceback.print_exc()
+            return {
+                'success': False,
+                'error': error_msg,
+                'document_id': None
+            }
+
+    def add_document_to_knowledge_base(self,
+                                     content: str,
+                                     filename: str,
+                                     metadata: Dict) -> Dict:
+        """
+        将文档内容添加到Dify知识库（兼容性方法，优先使用文本方式）
+
+        Args:
+            content: 文档内容
+            filename: 文件名
+            metadata: 文档元数据
+
+        Returns:
+            Dict: 添加结果
+        """
+        try:
+            # 优先使用文本方式创建文档
+            return self.add_document_to_knowledge_base_by_text(content, filename, metadata)
+
         except Exception as e:
             error_msg = f"文档内容上传失败: {str(e)}"
             logger.error(error_msg)
