@@ -9,6 +9,15 @@ import json
 from database import get_db
 from models import OAFileInfo, ProcessingLog, ProcessingStatus, BusinessCategory
 from tasks.document_processor import process_document, batch_process_documents, approve_document
+from services.system_monitor import (
+    get_system_snapshot,
+    get_s3_overview,
+    run_s3_full_diagnostics,
+    get_dify_overview,
+    get_recent_activity as monitor_recent_activity,
+    get_recent_errors as monitor_recent_errors,
+    get_queue_statistics as monitor_queue_statistics,
+)
 
 router = APIRouter()
 
@@ -372,3 +381,68 @@ async def get_file_logs(file_id: str, db: Session = Depends(get_db)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取处理日志失败: {str(e)}")
+@router.get("/system/status", summary="获取系统状态概览")
+async def get_system_status():
+    try:
+        return get_system_snapshot()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取系统状态失败: {str(e)}")
+
+
+@router.get("/system/s3", summary="获取S3配置与状态")
+async def get_system_s3_status():
+    try:
+        return get_s3_overview(include_stats=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取S3状态失败: {str(e)}")
+
+
+@router.post("/system/s3/test", summary="执行S3诊断")
+async def run_system_s3_test():
+    try:
+        return run_s3_full_diagnostics()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"执行S3诊断失败: {str(e)}")
+
+
+@router.get("/system/dify", summary="获取Dify集成状态")
+async def get_system_dify_status():
+    try:
+        return get_dify_overview()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取Dify状态失败: {str(e)}")
+
+
+@router.post("/system/dify/test", summary="测试Dify连接")
+async def test_system_dify_connection():
+    try:
+        overview = get_dify_overview()
+        return overview.get("connection", overview)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"测试Dify连接失败: {str(e)}")
+
+
+@router.get("/system/activity", summary="获取最近活动日志")
+async def get_system_activity(limit: int = Query(10, ge=1, le=50)):
+    try:
+        items = monitor_recent_activity(limit=limit)
+        return {"items": items, "limit": limit}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取活动日志失败: {str(e)}")
+
+
+@router.get("/system/errors", summary="获取最近错误")
+async def get_system_errors(limit: int = Query(5, ge=1, le=50)):
+    try:
+        items = monitor_recent_errors(limit=limit)
+        return {"items": items, "limit": limit}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取错误信息失败: {str(e)}")
+
+
+@router.get("/system/queue", summary="获取任务队列统计")
+async def get_system_queue():
+    try:
+        return monitor_queue_statistics()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取队列统计失败: {str(e)}")

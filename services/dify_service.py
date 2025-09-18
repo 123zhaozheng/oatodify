@@ -3,7 +3,7 @@ import json
 import logging
 import tempfile
 import os
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -208,7 +208,7 @@ class DifyService:
                     'document_id': None
                 }
 
-            # 准备数据，根据Dify API文档配置
+            # 准备数据，使用父子分段模式（hierarchical_model）
             data = {
                 'name': filename,
                 'text': content,
@@ -217,16 +217,19 @@ class DifyService:
                 'process_rule': {
                     'mode': 'custom',  # 自定义模式
                     'rules': {
-                        'pre_processing_rules': [],  # 暂不进行预处理
+                        'pre_processing_rules': [
+                            {'id': 'remove_extra_spaces', 'enabled': True},
+                            {'id': 'remove_urls_emails', 'enabled': False}
+                        ],
                         'segmentation': {
                             'separator': '@@@@@',  # 父分段标识符
                             'max_tokens': 2000     # 父分段最大长度
                         },
-                        'parent_mode': 'paragraph',  # 段落召回
+                        'parent_mode': 'paragraph',  # 段落召回模式
                         'subchunk_segmentation': {
                             'separator': '\n',   # 子分段标识符
                             'max_tokens': 500,   # 子分段最大长度
-                            'chunk_overlap': 50  # 重叠50token
+                            'chunk_overlap': 50  # 重叠token数
                         }
                     }
                 }
@@ -440,6 +443,47 @@ class DifyService:
                 'error': error_msg
             }
     
+
+    def get_dataset_overview(self) -> Dict[str, Any]:
+        """Fetch dataset level metadata and document totals."""
+        if not self.api_key:
+            return {'success': False, 'error': 'Dify API密钥未配置'}
+        if not self.dataset_id:
+            return {'success': False, 'error': 'Dify知识库ID未配置'}
+        overview: Dict[str, Any] = {'success': True}
+        try:
+            detail_url = f"{self.base_url}/v1/datasets/{self.dataset_id}"
+            detail_resp = self.session.get(detail_url, timeout=10)
+            if detail_resp.status_code == 200:
+                detail_payload = detail_resp.json()
+                overview['dataset'] = detail_payload.get('data') or detail_payload
+            else:
+                overview['success'] = False
+                overview['dataset_error'] = f"{detail_resp.status_code}: {detail_resp.text}"
+            docs_url = f"{self.base_url}/v1/datasets/{self.dataset_id}/documents?page=1&limit=1"
+            docs_resp = self.session.get(docs_url, timeout=10)
+            if docs_resp.status_code == 200:
+                docs_payload = docs_resp.json()
+                data = docs_payload.get('data') or docs_payload
+                pagination = data.get('pagination') or docs_payload.get('pagination') or {}
+                total = pagination.get('total') or data.get('total') or docs_payload.get('total')
+                if isinstance(total, int):
+                    overview['document_total'] = total
+                else:
+                    documents = data.get('data') or data.get('documents') or []
+                    overview['document_total'] = len(documents)
+                overview['pagination'] = pagination
+            else:
+                overview['success'] = False
+                overview['documents_error'] = f"{docs_resp.status_code}: {docs_resp.text}"
+            return overview
+        except requests.exceptions.RequestException as exc:
+            logger.error('Dify dataset overview request error: %s', exc)
+            return {'success': False, 'error': str(exc)}
+        except Exception as exc:
+            logger.error('Dify dataset overview failed: %s', exc)
+            return {'success': False, 'error': str(exc)}
+
     def check_api_connection(self) -> Dict:
         """检查Dify API连接状态"""
         try:

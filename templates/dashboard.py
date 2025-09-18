@@ -10,7 +10,7 @@ import os
 
 # 添加utils目录到Python路径
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from utils.api_config import get_statistics_api_url, get_files_api_url
+from utils.api_config import get_statistics_api_url, get_files_api_url, get_system_api_url
 
 def show_dashboard():
     """显示仪表板页面"""
@@ -207,12 +207,16 @@ def get_dashboard_stats():
     """获取仪表板统计数据"""
     try:
         url = get_statistics_api_url("dashboard")
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=20)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        return data
     except requests.exceptions.RequestException as e:
-        st.error(f"获取统计数据失败: {str(e)}")
-        st.info("请检查后端服务是否正常运行")
+        st.error(f"❌ 获取统计数据失败: {str(e)}")
+        if "timeout" in str(e).lower():
+            st.info("💡 提示：数据库查询较慢，请稍后重试")
+        else:
+            st.info("请检查后端服务是否正常运行")
         # 返回空数据而不是模拟数据
         return {
             'total_files': 0,
@@ -226,23 +230,27 @@ def get_dashboard_stats():
             'error_files': 0
         }
     except Exception as e:
-        st.error(f"处理统计数据失败: {str(e)}")
+        st.error(f"❌ 处理统计数据失败: {str(e)}")
         return {}
 
 def get_trend_data(days=7):
     """获取趋势数据"""
     try:
         url = get_statistics_api_url(f"trend?days={days}")
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        return data
     except requests.exceptions.RequestException as e:
-        st.error(f"获取趋势数据失败: {str(e)}")
-        st.info("请检查后端服务是否正常运行")
+        st.error(f"❌ 获取趋势数据失败: {str(e)}")
+        if "timeout" in str(e).lower():
+            st.info("💡 提示：数据库查询较慢，请稍后重试")
+        else:
+            st.info("请检查后端服务是否正常运行")
         # 返回空数据
         return {'trend_data': []}
     except Exception as e:
-        st.error(f"处理趋势数据失败: {str(e)}")
+        st.error(f"❌ 处理趋势数据失败: {str(e)}")
         return {}
 
 def trigger_batch_process():
@@ -257,18 +265,40 @@ def trigger_batch_process():
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
-def show_recent_activity():
+def show_recent_activity(limit: int = 8):
     """显示最近活动"""
     try:
-        # TODO: 实现真实的活动日志API端点
-        # 例如: GET /api/v1/activity/recent 
-        # 目前显示占位信息，避免用户混淆
-        
-        st.info("📝 最新活动日志功能开发中...")
-        st.caption("将显示文档处理、审核、错误等实时活动记录")
-        
-        if st.button("查看处理日志", key="view_processing_logs"):
-            st.info("完整活动日志功能待实现 - 需要后端 /api/v1/activity/recent 接口")
-            
-    except Exception as e:
+        url = get_system_api_url(f"activity?limit={limit}")
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        items = data.get("items", [])
+
+        if not items:
+            st.info("暂无最新活动")
+            return
+
+        records = []
+        for item in items:
+            records.append(
+                {
+                    "时间": format_datetime(item.get("created_at")),
+                    "文件ID": item.get("file_id"),
+                    "步骤": item.get("step"),
+                    "状态": item.get("status"),
+                    "耗时(s)": item.get("duration_seconds"),
+                }
+            )
+        st.dataframe(records, use_container_width=True, hide_index=True)
+    except requests.RequestException as e:
         st.error(f"加载活动日志失败: {str(e)}")
+
+
+def format_datetime(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        dt = pd.to_datetime(value)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return value

@@ -215,16 +215,19 @@ def get_pending_approval_files():
     """获取待审核文档列表"""
     try:
         url = get_files_api_url("?status=awaiting_approval&is_zw=true")
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         response.raise_for_status()
         data = response.json()
         return data.get('items', [])
     except requests.exceptions.RequestException as e:
-        st.error(f"获取待审核文档失败: {str(e)}")
-        st.info("请检查后端服务是否正常运行")
+        st.error(f"❌ 获取待审核文档失败: {str(e)}")
+        if "timeout" in str(e).lower():
+            st.info("💡 提示：数据库查询较慢，请稍后重试")
+        else:
+            st.info("请检查后端服务是否正常运行")
         return []
     except Exception as e:
-        st.error(f"处理待审核文档数据失败: {str(e)}")
+        st.error(f"❌ 处理待审核文档数据失败: {str(e)}")
         return []
 
 def submit_approval(file_id, approved, comment):
@@ -247,15 +250,19 @@ def get_file_detail(file_id):
     """获取文件详情"""
     try:
         url = get_files_api_url(file_id)
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        return data
     except requests.exceptions.RequestException as e:
-        st.error(f"获取文件详情失败: {str(e)}")
-        st.info("请检查后端服务是否正常运行")
+        st.error(f"❌ 获取文件详情失败: {str(e)}")
+        if "timeout" in str(e).lower():
+            st.info("💡 提示：数据库查询较慢，请稍后重试")
+        else:
+            st.info("请检查后端服务是否正常运行")
         return {}
     except Exception as e:
-        st.error(f"处理文件详情数据失败: {str(e)}")
+        st.error(f"❌ 处理文件详情数据失败: {str(e)}")
         return {}
 
 def format_file_size(size_bytes):

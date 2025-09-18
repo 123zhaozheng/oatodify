@@ -115,6 +115,35 @@ services:
       - oa-network
 
   # ===========================================
+  # 文档解析服务
+  # ===========================================
+  document-parser:
+    # 如果你有自己的解析服务镜像，替换下面的镜像名
+    image: abc:latest  # 替换为你的解析服务镜像
+    # 或者如果你有Dockerfile，可以这样构建：
+    # build:
+    #   context: /path/to/your/parser/service
+    #   dockerfile: Dockerfile
+    container_name: oa-document-parser
+    env_file:
+      - .env  # 如果解析服务需要环境变量
+    environment:
+      # 解析服务专用的环境变量
+      - PARSER_PORT=8080
+      - PARSER_MAX_FILE_SIZE=100MB
+      # 添加其他你需要的环境变量
+    ports:
+      - "8080:5000"  # 映射解析服务端口
+    volumes:
+      # 如果解析服务需要访问临时文件
+      - ./temp:/app/temp
+      # 添加其他需要的数据卷
+    restart: unless-stopped
+    networks:
+      - oa-network  # 加入同一个网络
+
+
+  # ===========================================
   # Nginx 反向代理（可选 - 开发环境可以注释掉）
   # ===========================================
   # nginx:

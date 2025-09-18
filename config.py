@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     supported_formats: list = Field(default=["pdf", "docx", "doc", "txt"])
 
     # 文档解析接口配置
-    document_parse_api_url: str = Field(default_factory=lambda: os.getenv("DOCUMENT_PARSE_API_URL", "http://localhost:8080"))
+    document_parse_api_url: str = Field(default_factory=lambda: os.getenv("DOCUMENT_PARSE_API_URL", "http://document-parser:8080"))
 
     # AI分析配置
     ai_analysis_max_length: int = Field(default_factory=lambda: int(os.getenv("AI_ANALYSIS_MAX_LENGTH", "50000")))
@@ -44,5 +44,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # 忽略额外的环境变量
 
 settings = Settings()

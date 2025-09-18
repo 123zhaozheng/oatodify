@@ -79,6 +79,14 @@ class APIConfig:
             return self.get_url(f"{base}/{endpoint}")
         return self.get_url(base)
 
+    def system_url(self, endpoint: str = "") -> str:
+        """获取系统监控相关API URL"""
+        base = "api/v1/system"
+        if endpoint:
+            endpoint = endpoint.lstrip('/')
+            return self.get_url(f"{base}/{endpoint}")
+        return self.get_url(base)
+
 # 全局API配置实例
 api_config = APIConfig()
 
@@ -94,6 +102,12 @@ def get_files_api_url(endpoint: str = "") -> str:
 def get_statistics_api_url(endpoint: str = "") -> str:
     """获取统计API URL的便捷函数"""
     return api_config.statistics_url(endpoint)
+
+
+def get_system_api_url(endpoint: str = "") -> str:
+    """获取系统监控API URL的便捷函数"""
+    return api_config.system_url(endpoint)
+
 
 def get_health_check_url() -> str:
     """获取健康检查URL的便捷函数"""
