@@ -215,7 +215,7 @@ class DifyService:
                 'indexing_technique': 'high_quality',  # 高质量索引
                 'doc_form': 'hierarchical_model',      # 父子分段模式
                 'process_rule': {
-                    'mode': 'custom',  # 自定义模式
+                    'mode': 'hierarchical',  # 父子
                     'rules': {
                         'pre_processing_rules': [
                             {'id': 'remove_extra_spaces', 'enabled': True},
