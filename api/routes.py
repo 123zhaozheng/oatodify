@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, case
 from typing import List, Optional
@@ -202,31 +203,59 @@ async def batch_process(limit: int = Query(10, ge=1, le=50, description="处理�
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"批量处理任务提交失败: {str(e)}")
 
+class ApprovalRequest(BaseModel):
+    approved: bool
+    comment: str = ""
+
 @router.post("/files/{file_id}/approve", summary="人工审核文档")
 async def approve_file(
     file_id: str,
-    approved: bool,
-    comment: str = "",
+    request: ApprovalRequest,
     db: Session = Depends(get_db)
 ):
     """人工审核文档"""
     try:
+        # 添加调试日志
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"收到审核请求: file_id={file_id}, approved={request.approved}, comment={request.comment}")
+        
+        # URL解码处理
+        import urllib.parse
+        decoded_file_id = urllib.parse.unquote(file_id)
+        logger.info(f"解码后的file_id: {decoded_file_id}")
+        
+        # 尝试用原始file_id查询
         file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == file_id).first()
         
+        # 如果没找到，尝试用解码后的file_id查询
         if not file_info:
-            raise HTTPException(status_code=404, detail="文件不存在")
+            file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == decoded_file_id).first()
+            logger.info(f"使用解码后的file_id查询结果: {'找到' if file_info else '未找到'}")
+        
+        # 如果还没找到，尝试用文件名查询
+        if not file_info:
+            file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefilename == decoded_file_id).first()
+            logger.info(f"使用文件名查询结果: {'找到' if file_info else '未找到'}")
+            if file_info:
+                logger.info(f"通过文件名找到文档，真实imagefileid: {file_info.imagefileid}")
+        
+        if not file_info:
+            raise HTTPException(status_code=404, detail=f"文件不存在，尝试的标识符: {file_id}, 解码后: {decoded_file_id}")
         
         if file_info.processing_status != ProcessingStatus.AWAITING_APPROVAL:
-            raise HTTPException(status_code=400, detail="文档状态不正确，无法审核")
+            raise HTTPException(status_code=400, detail=f"文档状态不正确，当前状态: {file_info.processing_status}, 无法审核")
         
-        # 提交审核任务
-        task = approve_document.delay(file_id, approved, comment)
+        # 使用真实的imagefileid提交审核任务
+        actual_file_id = file_info.imagefileid
+        task = approve_document.delay(actual_file_id, request.approved, request.comment)
         
         return {
             "success": True,
             "message": "审核任务已提交",
             "task_id": task.id,
-            "approved": approved
+            "approved": request.approved,
+            "actual_file_id": actual_file_id
         }
         
     except HTTPException:
