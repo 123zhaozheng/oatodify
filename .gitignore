@@ -28,7 +28,7 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
-
+.claude/
 # ---- 日志和调试 ----
 *.log
 logs/

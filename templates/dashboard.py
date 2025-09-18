@@ -5,6 +5,12 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import requests
 import json
+import sys
+import os
+
+# 添加utils目录到Python路径
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from utils.api_config import get_statistics_api_url, get_files_api_url
 
 def show_dashboard():
     """显示仪表板页面"""
@@ -200,10 +206,8 @@ def show_dashboard():
 def get_dashboard_stats():
     """获取仪表板统计数据"""
     try:
-        response = requests.get(
-            "http://localhost:18000/api/v1/statistics/dashboard",
-            timeout=10
-        )
+        url = get_statistics_api_url("dashboard")
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -228,10 +232,8 @@ def get_dashboard_stats():
 def get_trend_data(days=7):
     """获取趋势数据"""
     try:
-        response = requests.get(
-            f"http://localhost:18000/api/v1/statistics/trend?days={days}",
-            timeout=10
-        )
+        url = get_statistics_api_url(f"trend?days={days}")
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -246,10 +248,8 @@ def get_trend_data(days=7):
 def trigger_batch_process():
     """触发批量处理"""
     try:
-        response = requests.post(
-            "http://localhost:18000/api/v1/files/batch-process?limit=20",
-            timeout=10
-        )
+        url = get_files_api_url("batch-process?limit=20")
+        response = requests.post(url, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:

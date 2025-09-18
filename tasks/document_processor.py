@@ -311,7 +311,7 @@ def process_document(self, file_id: str):
         if db:
             db.close()
 
-@app.task
+@app.task(name='batch_process_documents')
 def batch_process_documents(limit: int = 10):
     """
     批量处理待处理的文档

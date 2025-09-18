@@ -2,6 +2,11 @@ import streamlit as st
 import os
 import requests
 import json
+import sys
+
+# 添加utils目录到Python路径
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from utils.api_config import get_health_check_url, get_statistics_api_url
 from config import settings
 
 def show_settings():
@@ -381,7 +386,8 @@ def mask_sensitive_info(text, mask_char="*", show_last=4):
 def check_database_connection():
     """检查数据库连接"""
     try:
-        response = requests.get("http://localhost:18000/health", timeout=5)
+        url = get_health_check_url()
+        response = requests.get(url, timeout=5)
         return response.status_code == 200
     except Exception:
         return False
@@ -463,7 +469,8 @@ def get_ai_analysis_stats():
     """获取AI分析统计"""
     try:
         # 从仪表板API获取统计数据
-        response = requests.get("http://localhost:18000/api/v1/statistics/dashboard", timeout=5)
+        url = get_statistics_api_url("dashboard")
+        response = requests.get(url, timeout=5)
         if response.status_code == 200:
             data = response.json()
             total_files = data.get('total_files', 0)
@@ -505,7 +512,8 @@ def get_system_health():
         # 检查API服务器
         api_healthy = False
         try:
-            response = requests.get("http://localhost:18000/health", timeout=5)
+            url = get_health_check_url()
+            response = requests.get(url, timeout=5)
             api_healthy = response.status_code == 200
         except:
             pass

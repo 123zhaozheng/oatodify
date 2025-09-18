@@ -3,6 +3,12 @@ import pandas as pd
 import requests
 import json
 from datetime import datetime
+import sys
+import os
+
+# 添加utils目录到Python路径
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from utils.api_config import get_files_api_url, get_health_check_url
 
 def show_approval():
     """显示人工审核页面"""
@@ -208,10 +214,8 @@ def show_file_detail(file_id, filename):
 def get_pending_approval_files():
     """获取待审核文档列表"""
     try:
-        response = requests.get(
-            "http://localhost:18000/api/v1/files/?status=awaiting_approval&is_zw=true",
-            timeout=10
-        )
+        url = get_files_api_url("?status=awaiting_approval&is_zw=true")
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         return data.get('items', [])
@@ -230,11 +234,8 @@ def submit_approval(file_id, approved, comment):
             'approved': approved,
             'comment': comment
         }
-        response = requests.post(
-            f"http://localhost:18000/api/v1/files/{file_id}/approve",
-            json=data,
-            timeout=10
-        )
+        url = get_files_api_url(f"{file_id}/approve")
+        response = requests.post(url, json=data, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -245,10 +246,8 @@ def submit_approval(file_id, approved, comment):
 def get_file_detail(file_id):
     """获取文件详情"""
     try:
-        response = requests.get(
-            f"http://localhost:18000/api/v1/files/{file_id}",
-            timeout=10
-        )
+        url = get_files_api_url(file_id)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
