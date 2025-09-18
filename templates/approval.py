@@ -209,7 +209,7 @@ def get_pending_approval_files():
     """获取待审核文档列表"""
     try:
         response = requests.get(
-            "http://localhost:8000/api/v1/files/?status=awaiting_approval&is_zw=true",
+            "http://localhost:18000/api/v1/files/?status=awaiting_approval&is_zw=true",
             timeout=10
         )
         response.raise_for_status()
@@ -231,7 +231,7 @@ def submit_approval(file_id, approved, comment):
             'comment': comment
         }
         response = requests.post(
-            f"http://localhost:8000/api/v1/files/{file_id}/approve",
+            f"http://localhost:18000/api/v1/files/{file_id}/approve",
             json=data,
             timeout=10
         )
@@ -246,7 +246,7 @@ def get_file_detail(file_id):
     """获取文件详情"""
     try:
         response = requests.get(
-            f"http://localhost:8000/api/v1/files/{file_id}",
+            f"http://localhost:18000/api/v1/files/{file_id}",
             timeout=10
         )
         response.raise_for_status()

@@ -1,0 +1,189 @@
+# =============================================================================
+# OA文档处理系统 Docker Compose 配置
+# 应用服务栈：API、前端、Worker等（数据库和缓存使用外部服务）
+# =============================================================================
+
+services:
+  # ===========================================
+  # FastAPI 后端服务
+  # ===========================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oa-api
+    env_file:
+      - .env
+    ports:
+      - "18000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    command: ["fastapi"]
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Streamlit 前端服务
+  # ===========================================
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oa-frontend
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    command: ["streamlit"]
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Celery Worker 服务
+  # ===========================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    restart: unless-stopped
+    command: ["celery-worker"]
+    deploy:
+      replicas: 2
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Celery Beat 定时任务调度器
+  # ===========================================
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oa-beat
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - beat_schedule:/tmp
+    restart: unless-stopped
+    command: ["celery-beat"]
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Celery Flower 监控界面
+  # ===========================================
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oa-flower
+    env_file:
+      - .env
+    ports:
+      - "5555:5555"
+    restart: unless-stopped
+    command: ["celery-flower"]
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Nginx 反向代理（可选 - 开发环境可以注释掉）
+  # ===========================================
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: oa-nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro
+  #   depends_on:
+  #     - api
+  #     - frontend
+  #   restart: unless-stopped
+  #   networks:
+  #     - oa-network
+
+# ===========================================
+# 网络配置
+# ===========================================
+networks:
+  oa-network:
+    driver: bridge
+
+# ===========================================
+# 数据卷配置
+# ===========================================
+volumes:
+  beat_schedule:
+    driver: local
+
+# =============================================================================
+# 使用说明:
+# 
+# 前提条件：
+# - PostgreSQL 和 Redis 需要外部启动
+# - 在 .env 文件中配置正确的 DATABASE_URL 和 REDIS_URL
+# 
+# 1. 启动完整系统:
+#    docker-compose up -d
+# 
+# 2. 启动部分服务:
+#    docker-compose up -d api frontend  # 只启动API和前端
+#    docker-compose up -d worker beat   # 只启动后台任务
+# 
+# 3. 查看服务状态:
+#    docker-compose ps
+# 
+# 4. 查看服务日志:
+#    docker-compose logs -f api
+#    docker-compose logs -f frontend
+#    docker-compose logs -f worker
+# 
+# 5. 停止所有服务:
+#    docker-compose down
+# 
+# 6. 重启特定服务:
+#    docker-compose restart api
+# 
+# 7. 扩展 Worker 数量:
+#    docker-compose up -d --scale worker=4
+# 
+# 8. 服务访问地址:
+#    - API 文档: http://localhost:8000/docs
+#    - 前端界面: http://localhost:8501
+#    - Flower 监控: http://localhost:5555
+#    - Nginx (如启用): http://localhost
+# 
+# 注意事项:
+# - 确保外部 PostgreSQL 和 Redis 服务已启动
+# - 确保 .env 文件中的数据库和Redis连接配置正确
+# - 如不需要Nginx代理，可以注释掉nginx服务
+# =============================================================================

@@ -5,8 +5,6 @@ import tempfile
 import os
 from typing import Dict, Optional
 from config import settings
-from docx import Document
-from docx.shared import Inches
 
 logger = logging.getLogger(__name__)
 

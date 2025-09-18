@@ -201,7 +201,7 @@ def get_dashboard_stats():
     """获取仪表板统计数据"""
     try:
         response = requests.get(
-            "http://localhost:8000/api/v1/statistics/dashboard",
+            "http://localhost:18000/api/v1/statistics/dashboard",
             timeout=10
         )
         response.raise_for_status()
@@ -229,7 +229,7 @@ def get_trend_data(days=7):
     """获取趋势数据"""
     try:
         response = requests.get(
-            f"http://localhost:8000/api/v1/statistics/trend?days={days}",
+            f"http://localhost:18000/api/v1/statistics/trend?days={days}",
             timeout=10
         )
         response.raise_for_status()
@@ -247,7 +247,7 @@ def trigger_batch_process():
     """触发批量处理"""
     try:
         response = requests.post(
-            "http://localhost:8000/api/v1/files/batch-process?limit=20",
+            "http://localhost:18000/api/v1/files/batch-process?limit=20",
             timeout=10
         )
         response.raise_for_status()
