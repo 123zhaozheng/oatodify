@@ -4,12 +4,12 @@ import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
 from database import get_db_session
-from models import OAFileInfo, ProcessingLog, ProcessingStatus
+from models import OAFileInfo, ProcessingLog, ProcessingStatus, BusinessCategory
 from services.s3_service import s3_service
 from services.decryption_service import decryption_service
 from services.api_document_parser import api_document_parser
 from services.ai_analyzer import ai_analyzer
-from services.dify_service import dify_service
+from services.dify_service import dify_service, multi_kb_manager
 from config import settings
 import json
 
@@ -75,7 +75,7 @@ def update_file_status(file_id: str, status: ProcessingStatus, message: str = No
 @app.task(bind=True, max_retries=3, default_retry_delay=300)
 def process_document(self, file_id: str):
     """
-    处理单个文档的完整流程
+    处理单个文档的完整流程 - 支持多知识库和分类映射
     
     Args:
         file_id: 文件ID
@@ -195,22 +195,38 @@ def process_document(self, file_id: str):
         
         update_file_status(file_id, ProcessingStatus.ANALYZING, "AI分析中")
         
-        # 步骤4: AI分析
+        # 步骤4: 增强版AI分析 - 支持分类映射和多知识库
         step_start = datetime.now()
+        target_knowledge_base = None
         try:
-            analysis_result = ai_analyzer.analyze_document_content(
-                content, file_info.imagefilename, metadata
+            # 构建文件信息字典(从数据库字段)
+            file_info_dict = {
+                'imagefileid': file_info.imagefileid,
+                'business_category': file_info.business_category,
+                'imagefilename': file_info.imagefilename,
+                'imagefiletype': file_info.imagefiletype,
+                'is_zw': file_info.is_zw,
+                'filesize': file_info.filesize
+            }
+            
+            # 使用新的AI分析器，返回分析结果和目标知识库
+            analysis_result, target_knowledge_base = ai_analyzer.analyze_document_content(
+                content, file_info.imagefilename, file_info_dict, metadata
             )
             
             step_duration = (datetime.now() - step_start).seconds
+            
+            kb_info = target_knowledge_base.name if target_knowledge_base else "未找到目标知识库"
             log_processing_step(file_id, "analyze", "success", 
-                              f"分析完成，适合知识库: {analysis_result['suitable_for_kb']}", 
+                              f"分析完成 [分类: {file_info.business_category.value}]，适合知识库: {analysis_result['suitable_for_kb']}, 目标知识库: {kb_info}", 
                               step_duration)
             
-            # 保存分析结果
+            # 保存分析结果和目标知识库
             file_info.ai_analysis_result = json.dumps(analysis_result, ensure_ascii=False)
             file_info.ai_confidence_score = analysis_result['confidence_score']
             file_info.should_add_to_kb = analysis_result['suitable_for_kb']
+            if target_knowledge_base:
+                file_info.target_knowledge_base_id = target_knowledge_base.id
             
         except Exception as e:
             step_duration = (datetime.now() - step_start).seconds
@@ -221,23 +237,37 @@ def process_document(self, file_id: str):
                 'suitable_for_kb': False,
                 'confidence_score': 0,
                 'reasons': [f"AI分析失败: {str(e)}"],
-                'analysis_method': 'failed'
+                'analysis_method': 'failed',
+                'category': file_info.business_category.value if file_info.business_category else 'unknown'
             }
             file_info.ai_analysis_result = json.dumps(analysis_result, ensure_ascii=False)
             file_info.ai_confidence_score = 0
             file_info.should_add_to_kb = False
         
-        # 步骤5: 决定下一步处理
-        if analysis_result['suitable_for_kb'] and analysis_result['confidence_score'] >= 80:
+        # 步骤5: 决定下一步处理 - 使用分类特定的阈值
+        processor_config = analysis_result.get('processor_config', {})
+        auto_approve_threshold = processor_config.get('auto_approve_threshold', 80)
+        min_confidence = processor_config.get('min_confidence_score', 40)
+        
+        if analysis_result['suitable_for_kb'] and analysis_result['confidence_score'] >= auto_approve_threshold:
             # 高置信度，直接加入知识库
             step_start = datetime.now()
             try:
+                # 查询对应的知识库并创建Dify服务对象
+                if target_knowledge_base:
+                    dify_service_instance = multi_kb_manager.get_service_for_knowledge_base(target_knowledge_base)
+                    logger.info(f"使用专用知识库服务: {target_knowledge_base.name}")
+                else:
+                    dify_service_instance = dify_service  # 使用默认服务
+                    logger.warning("使用默认知识库服务")
+                
                 # 使用文本内容直接传入Dify，使用父子分段策略
-                dify_result = dify_service.add_document_to_knowledge_base_by_text(
+                dify_result = dify_service_instance.add_document_to_knowledge_base_by_text(
                     content, final_filename, {
                         **metadata,
                         'analysis_result': analysis_result,
-                        'file_id': file_id
+                        'file_id': file_id,
+                        'business_category': file_info.business_category.value if file_info.business_category else 'unknown'
                     }
                 )
                 
@@ -245,9 +275,10 @@ def process_document(self, file_id: str):
                 
                 if dify_result['success']:
                     file_info.document_id = dify_result.get('document_id')
-                    update_file_status(file_id, ProcessingStatus.COMPLETED, "已成功加入知识库")
+                    kb_name = dify_result.get('knowledge_base_name', 'unknown')
+                    update_file_status(file_id, ProcessingStatus.COMPLETED, f"已成功加入知识库: {kb_name}")
                     log_processing_step(file_id, "add_to_kb", "success", 
-                                      f"成功加入知识库: {dify_result.get('document_id')}", 
+                                      f"成功加入知识库 [{kb_name}]: {dify_result.get('document_id')}", 
                                       step_duration)
                 else:
                     error_msg = f"加入知识库失败: {dify_result['error']}"
@@ -264,11 +295,12 @@ def process_document(self, file_id: str):
                 file_info.error_count = (file_info.error_count or 0) + 1
                 file_info.last_error = error_msg
         
-        elif analysis_result['suitable_for_kb'] and analysis_result['confidence_score'] >= 40:
+        elif analysis_result['suitable_for_kb'] and analysis_result['confidence_score'] >= min_confidence:
             # 中等置信度，需要人工审核
-            update_file_status(file_id, ProcessingStatus.AWAITING_APPROVAL, "等待人工审核")
+            kb_info = target_knowledge_base.name if target_knowledge_base else "默认知识库"
+            update_file_status(file_id, ProcessingStatus.AWAITING_APPROVAL, f"等待人工审核 (目标知识库: {kb_info})")
             log_processing_step(file_id, "review", "pending", 
-                              f"置信度{analysis_result['confidence_score']}%，需要人工审核")
+                              f"置信度{analysis_result['confidence_score']}%，需要人工审核 (目标知识库: {kb_info})")
         
         else:
             # 低置信度，跳过
@@ -279,14 +311,18 @@ def process_document(self, file_id: str):
         db.commit()
         
         total_duration = (datetime.now() - start_time).seconds
-        logger.info(f"文档处理完成: {file_id}, 耗时: {total_duration}秒")
+        logger.info(f"文档处理完成: {file_id}, 耗时: {total_duration}秒, 目标知识库: {target_knowledge_base.name if target_knowledge_base else 'None'}")
         
         return {
             'success': True,
             'file_id': file_id,
             'status': file_info.processing_status.value,
             'duration': total_duration,
-            'analysis_result': analysis_result
+            'analysis_result': analysis_result,
+            'target_knowledge_base': {
+                'id': target_knowledge_base.id if target_knowledge_base else None,
+                'name': target_knowledge_base.name if target_knowledge_base else None
+            }
         }
         
     except Exception as e:
@@ -338,9 +374,10 @@ def batch_process_documents(limit: int = 10):
                 results.append({
                     'file_id': file_info.imagefileid,
                     'task_id': task.id,
-                    'filename': file_info.imagefilename
+                    'filename': file_info.imagefilename,
+                    'business_category': file_info.business_category.value if file_info.business_category else 'unknown'
                 })
-                logger.info(f"已提交处理任务: {file_info.imagefileid}")
+                logger.info(f"已提交处理任务: {file_info.imagefileid} [分类: {file_info.business_category.value if file_info.business_category else 'unknown'}]")
             except Exception as e:
                 logger.error(f"提交处理任务失败 {file_info.imagefileid}: {e}")
                 results.append({
@@ -366,7 +403,7 @@ def batch_process_documents(limit: int = 10):
 @app.task
 def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
     """
-    人工审核文档
+    人工审核文档 - 支持多知识库
     
     Args:
         file_id: 文件ID
@@ -419,22 +456,34 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
                     log_processing_step(file_id, "manual_approve", "failed", error_msg)
                     return {'success': False, 'error': error_msg}
 
+                # 查询对应的知识库并创建Dify服务对象
+                target_kb = None
+                if file_info.target_knowledge_base_id:
+                    target_kb = file_info.target_knowledge_base
+                    dify_service_instance = multi_kb_manager.get_service_for_knowledge_base(target_kb)
+                    logger.info(f"使用目标知识库服务: {target_kb.name}")
+                else:
+                    dify_service_instance = dify_service  # 使用默认服务
+                    logger.warning("使用默认知识库服务进行人工审核")
+
                 # 使用文本内容传入方式，支持父子分段策略
-                dify_result = dify_service.add_document_to_knowledge_base_by_text(
+                dify_result = dify_service_instance.add_document_to_knowledge_base_by_text(
                     content, file_info.imagefilename, {
                         'analysis_result': analysis_result,
                         'file_id': file_id,
                         'manual_approved': True,
-                        'reviewer_comment': reviewer_comment
+                        'reviewer_comment': reviewer_comment,
+                        'business_category': file_info.business_category.value if file_info.business_category else 'unknown'
                     }
                 )
                 
                 if dify_result['success']:
                     file_info.document_id = dify_result.get('document_id')
+                    kb_name = dify_result.get('knowledge_base_name', target_kb.name if target_kb else 'unknown')
                     update_file_status(file_id, ProcessingStatus.COMPLETED, 
-                                     f"人工审核通过并加入知识库: {reviewer_comment}")
+                                     f"人工审核通过并加入知识库 [{kb_name}]: {reviewer_comment}")
                     log_processing_step(file_id, "manual_approve", "success", 
-                                      f"审核通过: {reviewer_comment}")
+                                      f"审核通过，加入知识库 [{kb_name}]: {reviewer_comment}")
                 else:
                     error_msg = f"加入知识库失败: {dify_result['error']}"
                     update_file_status(file_id, ProcessingStatus.FAILED, error_msg)

@@ -5,16 +5,33 @@ import tempfile
 import os
 from typing import Any, Dict, Optional
 from config import settings
+from models import KnowledgeBase
 
 logger = logging.getLogger(__name__)
 
 class DifyService:
-    """Dify知识库集成服务"""
+    """Dify知识库集成服务 - 支持父子分段"""
     
-    def __init__(self):
-        self.api_key = settings.dify_api_key
-        self.base_url = settings.dify_base_url.rstrip('/')
-        self.dataset_id = settings.dify_dataset_id
+    def __init__(self, knowledge_base: Optional[KnowledgeBase] = None):
+        """
+        初始化Dify服务
+        
+        Args:
+            knowledge_base: 指定的知识库配置，如果为None则使用默认配置
+        """
+        if knowledge_base:
+            # 使用指定知识库的配置
+            self.api_key = knowledge_base.api_key or settings.dify_api_key
+            self.base_url = (knowledge_base.base_url or settings.dify_base_url).rstrip('/')
+            self.dataset_id = knowledge_base.dify_dataset_id
+            self.knowledge_base = knowledge_base
+        else:
+            # 使用默认配置
+            self.api_key = settings.dify_api_key
+            self.base_url = settings.dify_base_url.rstrip('/')
+            self.dataset_id = settings.dify_dataset_id
+            self.knowledge_base = None
+        
         self.session = requests.Session()
         
         if self.api_key:
@@ -22,6 +39,11 @@ class DifyService:
                 'Authorization': f'Bearer {self.api_key}',
                 'Content-Type': 'application/json'
             })
+    
+    @classmethod
+    def create_for_knowledge_base(cls, knowledge_base: KnowledgeBase) -> 'DifyService':
+        """为指定知识库创建Dify服务实例"""
+        return cls(knowledge_base=knowledge_base)
     
     def convert_doc_to_docx(self, doc_content: bytes, original_filename: str) -> bytes:
         """
@@ -80,7 +102,7 @@ class DifyService:
                 final_filename = filename.rsplit('.', 1)[0] + '.docx'
                 logger.info(f"DOC转换完成，新文件名: {final_filename}")
             
-            # 准备multipart form data - 使用Dify API支持的字段
+            # 准备multipart form data - 使用父子分段策略
             data_json = {
                 'indexing_technique': 'high_quality',
                 'process_rule': {
@@ -106,13 +128,15 @@ class DifyService:
                     data_json['doc_metadata'] = {
                         'file_id': metadata['file_id'],
                         'analysis_result': metadata.get('analysis_result', {}),
-                        'source': 'OA_Document_Processor'
+                        'source': 'OA_Document_Processor',
+                        'knowledge_base_name': self.knowledge_base.name if self.knowledge_base else 'default'
                     }
             
             # 发送文件上传请求到Dify API
             url = f"{self.base_url}/v1/datasets/{self.dataset_id}/document/create-by-file"
             
-            logger.info(f"向Dify上传文件: {final_filename} (父子分段模式)")
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            logger.info(f"向Dify上传文件: {final_filename} (父子分段模式) -> {kb_info}")
             
             files = {
                 'file': (final_filename, final_content, 'application/octet-stream')
@@ -137,17 +161,18 @@ class DifyService:
                 result = response.json()
                 document_id = result.get('document', {}).get('id') or result.get('id')
                 
-                logger.info(f"文档成功上传到Dify知识库: {document_id} (父子分段模式)")
+                logger.info(f"文档成功上传到Dify知识库: {document_id} (父子分段模式) -> {kb_info}")
                 
                 return {
                     'success': True,
                     'document_id': document_id,
                     'error': None,
                     'response': result,
-                    'segmentation_mode': 'hierarchical_model'
+                    'segmentation_mode': 'hierarchical_model',
+                    'knowledge_base_name': self.knowledge_base.name if self.knowledge_base else 'default'
                 }
             else:
-                error_msg = f"Dify文件上传失败: {response.status_code} - {response.text}"
+                error_msg = f"Dify文件上传失败 ({kb_info}): {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 
                 return {
@@ -158,7 +183,8 @@ class DifyService:
                 }
                 
         except requests.exceptions.Timeout:
-            error_msg = "Dify文件上传超时"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"Dify文件上传超时 ({kb_info})"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -166,7 +192,8 @@ class DifyService:
                 'document_id': None
             }
         except requests.exceptions.RequestException as e:
-            error_msg = f"Dify文件上传网络错误: {str(e)}"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"Dify文件上传网络错误 ({kb_info}): {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -174,7 +201,8 @@ class DifyService:
                 'document_id': None
             }
         except Exception as e:
-            error_msg = f"文件上传到Dify失败: {str(e)}"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"文件上传到Dify失败 ({kb_info}): {str(e)}"
             logger.error(error_msg)
             import traceback
             traceback.print_exc()
@@ -189,7 +217,7 @@ class DifyService:
                                              filename: str,
                                              metadata: Dict) -> Dict:
         """
-        通过文本内容将文档添加到Dify知识库（使用create-by-text接口）
+        通过文本内容将文档添加到Dify知识库（使用父子分段模式）
 
         Args:
             content: 文档内容
@@ -238,12 +266,14 @@ class DifyService:
             # 添加元数据
             if metadata and 'file_id' in metadata:
                 # 在文档名称中包含元数据信息，便于追溯
-                data['name'] = f"{filename} (ID: {metadata['file_id']})"
+                kb_name = self.knowledge_base.name if self.knowledge_base else 'default'
+                data['name'] = f"{filename} (ID: {metadata['file_id']}) [{kb_name}]"
 
             # 发送请求到Dify API
             url = f"{self.base_url}/v1/datasets/{self.dataset_id}/document/create-by-text"
 
-            logger.info(f"通过文本创建Dify文档: {filename} (父子分段模式)")
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            logger.info(f"通过文本创建Dify文档: {filename} (父子分段模式) -> {kb_info}")
             logger.info(f"文本长度: {len(content)} 字符")
 
             response = self.session.post(url, json=data, timeout=60)
@@ -252,17 +282,18 @@ class DifyService:
                 result = response.json()
                 document_id = result.get('document', {}).get('id') or result.get('id')
 
-                logger.info(f"文档通过文本成功创建到Dify知识库: {document_id}")
+                logger.info(f"文档通过文本成功创建到Dify知识库: {document_id} -> {kb_info}")
 
                 return {
                     'success': True,
                     'document_id': document_id,
                     'error': None,
                     'response': result,
-                    'segmentation_mode': 'hierarchical_model'
+                    'segmentation_mode': 'hierarchical_model',
+                    'knowledge_base_name': self.knowledge_base.name if self.knowledge_base else 'default'
                 }
             else:
-                error_msg = f"Dify文本创建失败: {response.status_code} - {response.text}"
+                error_msg = f"Dify文本创建失败 ({kb_info}): {response.status_code} - {response.text}"
                 logger.error(error_msg)
 
                 return {
@@ -273,7 +304,8 @@ class DifyService:
                 }
 
         except requests.exceptions.Timeout:
-            error_msg = "Dify文本创建超时"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"Dify文本创建超时 ({kb_info})"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -281,7 +313,8 @@ class DifyService:
                 'document_id': None
             }
         except requests.exceptions.RequestException as e:
-            error_msg = f"Dify文本创建网络错误: {str(e)}"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"Dify文本创建网络错误 ({kb_info}): {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -289,7 +322,8 @@ class DifyService:
                 'document_id': None
             }
         except Exception as e:
-            error_msg = f"文本创建到Dify失败: {str(e)}"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"文本创建到Dify失败 ({kb_info}): {str(e)}"
             logger.error(error_msg)
             import traceback
             traceback.print_exc()
@@ -361,21 +395,23 @@ class DifyService:
             # 发送更新请求到Dify API
             url = f"{self.base_url}/v1/datasets/{self.dataset_id}/documents/{document_id}/update_by_text"
             
-            logger.info(f"更新Dify文档: {document_id}")
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            logger.info(f"更新Dify文档: {document_id} -> {kb_info}")
             
             response = self.session.post(url, json=data, timeout=30)
             
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"文档更新成功: {document_id}")
+                logger.info(f"文档更新成功: {document_id} -> {kb_info}")
                 
                 return {
                     'success': True,
                     'error': None,
-                    'response': result
+                    'response': result,
+                    'knowledge_base_name': self.knowledge_base.name if self.knowledge_base else 'default'
                 }
             else:
-                error_msg = f"Dify文档更新失败: {response.status_code} - {response.text}"
+                error_msg = f"Dify文档更新失败 ({kb_info}): {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 
                 return {
@@ -385,7 +421,8 @@ class DifyService:
                 }
             
         except Exception as e:
-            error_msg = f"更新Dify文档失败: {str(e)}"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"更新Dify文档失败 ({kb_info}): {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -413,20 +450,22 @@ class DifyService:
             # 发送删除请求到Dify API
             url = f"{self.base_url}/v1/datasets/{self.dataset_id}/documents/{document_id}"
             
-            logger.info(f"删除Dify文档: {document_id}")
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            logger.info(f"删除Dify文档: {document_id} -> {kb_info}")
             
             response = self.session.delete(url, timeout=30)
             
             if response.status_code == 200 or response.status_code == 204:
-                logger.info(f"文档删除成功: {document_id}")
+                logger.info(f"文档删除成功: {document_id} -> {kb_info}")
                 
                 return {
                     'success': True,
                     'error': None,
-                    'message': f'文档已删除: {document_id}'
+                    'message': f'文档已删除: {document_id}',
+                    'knowledge_base_name': self.knowledge_base.name if self.knowledge_base else 'default'
                 }
             else:
-                error_msg = f"Dify文档删除失败: {response.status_code} - {response.text}"
+                error_msg = f"Dify文档删除失败 ({kb_info}): {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 
                 return {
@@ -436,7 +475,8 @@ class DifyService:
                 }
             
         except Exception as e:
-            error_msg = f"删除Dify文档失败: {str(e)}"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"删除Dify文档失败 ({kb_info}): {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
@@ -450,7 +490,16 @@ class DifyService:
             return {'success': False, 'error': 'Dify API密钥未配置'}
         if not self.dataset_id:
             return {'success': False, 'error': 'Dify知识库ID未配置'}
-        overview: Dict[str, Any] = {'success': True}
+        
+        kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+        overview: Dict[str, Any] = {
+            'success': True,
+            'knowledge_base_info': {
+                'name': self.knowledge_base.name if self.knowledge_base else 'default',
+                'dataset_id': self.dataset_id
+            }
+        }
+        
         try:
             detail_url = f"{self.base_url}/v1/datasets/{self.dataset_id}"
             detail_resp = self.session.get(detail_url, timeout=10)
@@ -478,10 +527,10 @@ class DifyService:
                 overview['documents_error'] = f"{docs_resp.status_code}: {docs_resp.text}"
             return overview
         except requests.exceptions.RequestException as exc:
-            logger.error('Dify dataset overview request error: %s', exc)
+            logger.error(f'Dify dataset overview request error ({kb_info}): %s', exc)
             return {'success': False, 'error': str(exc)}
         except Exception as exc:
-            logger.error('Dify dataset overview failed: %s', exc)
+            logger.error(f'Dify dataset overview failed ({kb_info}): %s', exc)
             return {'success': False, 'error': str(exc)}
 
     def check_api_connection(self) -> Dict:
@@ -498,15 +547,18 @@ class DifyService:
             
             response = self.session.get(url, timeout=10)
             
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            
             if response.status_code == 200:
-                logger.info("Dify API连接测试成功")
+                logger.info(f"Dify API连接测试成功 ({kb_info})")
                 return {
                     'success': True,
                     'error': None,
-                    'message': 'API连接正常'
+                    'message': f'API连接正常 ({kb_info})',
+                    'knowledge_base_name': self.knowledge_base.name if self.knowledge_base else 'default'
                 }
             else:
-                error_msg = f"Dify API连接失败: {response.status_code} - {response.text}"
+                error_msg = f"Dify API连接失败 ({kb_info}): {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 return {
                     'success': False,
@@ -514,26 +566,50 @@ class DifyService:
                 }
             
         except requests.exceptions.Timeout:
-            error_msg = "Dify API连接超时"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"Dify API连接超时 ({kb_info})"
             logger.error(error_msg)
             return {
                 'success': False,
                 'error': error_msg
             }
         except requests.exceptions.RequestException as e:
-            error_msg = f"Dify API网络错误: {str(e)}"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"Dify API网络错误 ({kb_info}): {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
                 'error': error_msg
             }
         except Exception as e:
-            error_msg = f"Dify API连接检查失败: {str(e)}"
+            kb_info = f"知识库: {self.knowledge_base.name}" if self.knowledge_base else "默认知识库"
+            error_msg = f"Dify API连接检查失败 ({kb_info}): {str(e)}"
             logger.error(error_msg)
             return {
                 'success': False,
                 'error': error_msg
             }
 
-# 创建全局实例
+# 创建全局实例（默认配置）
 dify_service = DifyService()
+
+# 简单的多知识库管理器
+class MultiKnowledgeBaseManager:
+    """简单的多知识库管理器"""
+    
+    def __init__(self):
+        self._services = {}  # 缓存Dify服务实例
+    
+    def get_service_for_knowledge_base(self, knowledge_base: KnowledgeBase) -> DifyService:
+        """获取指定知识库的Dify服务实例"""
+        if knowledge_base.id not in self._services:
+            self._services[knowledge_base.id] = DifyService.create_for_knowledge_base(knowledge_base)
+        
+        return self._services[knowledge_base.id]
+    
+    def clear_cache(self):
+        """清除服务实例缓存"""
+        self._services.clear()
+
+# 创建全局多知识库管理器
+multi_kb_manager = MultiKnowledgeBaseManager()

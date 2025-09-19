@@ -1,5 +1,6 @@
-from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, Enum as SQLEnum
+from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, Enum as SQLEnum, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from enum import Enum
 from datetime import datetime
@@ -26,6 +27,79 @@ class ProcessingStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+class KnowledgeBaseStatus(str, Enum):
+    """知识库状态枚举"""
+    ACTIVE = "active"      # 激活
+    INACTIVE = "inactive"  # 停用
+    MAINTENANCE = "maintenance"  # 维护中
+
+class KnowledgeBase(Base):
+    """知识库信息表"""
+    
+    __tablename__ = "knowledge_bases"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # 基础信息
+    name = Column(String(200), nullable=False, comment="知识库名称")
+    description = Column(Text, comment="知识库描述")
+    dify_dataset_id = Column(String(100), nullable=False, unique=True, index=True, comment="Dify数据集ID")
+    
+    # 配置信息
+    api_key = Column(String(500), comment="专用API密钥")
+    base_url = Column(String(500), comment="专用API地址")
+    
+    # 状态信息
+    status = Column(SQLEnum(KnowledgeBaseStatus), default=KnowledgeBaseStatus.ACTIVE, 
+                   nullable=False, comment="知识库状态")
+    document_count = Column(Integer, default=0, comment="文档数量")
+    last_sync_at = Column(DateTime, comment="最后同步时间")
+    
+    # 时间戳
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    
+    # 关系
+    category_mappings = relationship("DocumentCategoryMapping", back_populates="knowledge_base")
+    
+    def __repr__(self):
+        return f"<KnowledgeBase(id={self.id}, name={self.name}, status={self.status})>"
+
+class DocumentCategoryMapping(Base):
+    """文档分类与知识库关系表"""
+    
+    __tablename__ = "document_category_mappings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # 关联信息
+    knowledge_base_id = Column(Integer, ForeignKey('knowledge_bases.id'), nullable=False, 
+                              comment="知识库ID")
+    business_category = Column(SQLEnum(BusinessCategory), nullable=False, 
+                              comment="业务分类")
+    
+    # AI处理配置
+    ai_prompt_template = Column(Text, comment="AI提示词模板")
+    ai_output_schema = Column(Text, comment="AI输出JSON格式定义")
+    processing_priority = Column(Integer, default=5, comment="处理优先级（1-10）")
+    
+    # 质量控制
+    min_confidence_score = Column(Integer, default=70, comment="最低置信度要求")
+    auto_approve_threshold = Column(Integer, default=90, comment="自动审批阈值")
+    
+    # 状态
+    is_active = Column(Boolean, default=True, comment="是否启用")
+    
+    # 时间戳
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    
+    # 关系
+    knowledge_base = relationship("KnowledgeBase", back_populates="category_mappings")
+    
+    def __repr__(self):
+        return f"<DocumentCategoryMapping(id={self.id}, kb_id={self.knowledge_base_id}, category={self.business_category})>"
 
 class OAFileInfo(Base):
     """OA系统文件信息模型"""
@@ -58,6 +132,10 @@ class OAFileInfo(Base):
     ai_confidence_score = Column(Integer, comment="AI置信度（0-100）")
     should_add_to_kb = Column(Boolean, comment="是否应该加入知识库")
     
+    # 知识库关联
+    target_knowledge_base_id = Column(Integer, ForeignKey('knowledge_bases.id'), 
+                                     comment="目标知识库ID")
+    
     # 关联的Document ID（处理成功后）
     document_id = Column(Integer, comment="关联的documents表ID")
     
@@ -72,6 +150,9 @@ class OAFileInfo(Base):
     # 时间戳
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    
+    # 关系
+    target_knowledge_base = relationship("KnowledgeBase")
 
     def __repr__(self):
         return f"<OAFileInfo(id={self.id}, filename={self.imagefilename}, status={self.processing_status})>"
