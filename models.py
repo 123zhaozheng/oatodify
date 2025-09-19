@@ -132,9 +132,6 @@ class OAFileInfo(Base):
     ai_confidence_score = Column(Integer, comment="AI置信度（0-100）")
     should_add_to_kb = Column(Boolean, comment="是否应该加入知识库")
     
-    # 知识库关联
-    target_knowledge_base_id = Column(Integer, ForeignKey('knowledge_bases.id'), 
-                                     comment="目标知识库ID")
     
     # 关联的Document ID（处理成功后）
     document_id = Column(Integer, comment="关联的documents表ID")
@@ -151,8 +148,6 @@ class OAFileInfo(Base):
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
     
-    # 关系
-    target_knowledge_base = relationship("KnowledgeBase")
 
     def __repr__(self):
         return f"<OAFileInfo(id={self.id}, filename={self.imagefilename}, status={self.processing_status})>"

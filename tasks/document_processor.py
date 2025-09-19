@@ -10,6 +10,7 @@ from services.decryption_service import decryption_service
 from services.api_document_parser import api_document_parser
 from services.ai_analyzer import ai_analyzer
 from services.dify_service import dify_service, multi_kb_manager
+from services.file_filter import file_filter
 from config import settings
 import json
 
@@ -61,16 +62,37 @@ def update_file_status(file_id: str, status: ProcessingStatus, message: str = No
             file_info.processing_status = status
             if message:
                 file_info.processing_message = message
-            
+
             if status == ProcessingStatus.PENDING:
                 file_info.processing_started_at = datetime.now()
             elif status in [ProcessingStatus.COMPLETED, ProcessingStatus.FAILED, ProcessingStatus.SKIPPED]:
                 file_info.processing_completed_at = datetime.now()
-            
+
             db.commit()
         db.close()
     except Exception as e:
         logger.error(f"更新文件状态失败: {e}")
+
+def can_process_file(file_id: str) -> bool:
+    """检查文件是否可以被处理（防止重复处理已跳过的文档）"""
+    try:
+        db = get_db_session()
+        file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == file_id).first()
+        db.close()
+
+        if not file_info:
+            logger.warning(f"文件不存在: {file_id}")
+            return False
+
+        # 只有 PENDING 状态的文档才能被处理
+        if file_info.processing_status != ProcessingStatus.PENDING:
+            logger.info(f"文件 {file_id} 状态为 {file_info.processing_status.value}，跳过处理")
+            return False
+
+        return True
+    except Exception as e:
+        logger.error(f"检查文件处理状态失败: {e}")
+        return False
 
 @app.task(bind=True, max_retries=3, default_retry_delay=300)
 def process_document(self, file_id: str):
@@ -85,20 +107,38 @@ def process_document(self, file_id: str):
     
     try:
         logger.info(f"开始处理文档: {file_id}")
-        
+
+        # 检查文件是否可以被处理（防止重复处理已跳过的文档）
+        if not can_process_file(file_id):
+            logger.info(f"文档 {file_id} 无法处理，可能已被跳过或正在处理中")
+            return {'success': False, 'error': '文档无法处理，状态不正确'}
+
         # 获取数据库会话
         db = get_db_session()
         file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == file_id).first()
-        
+
         if not file_info:
             logger.error(f"文件信息不存在: {file_id}")
             return {'success': False, 'error': '文件信息不存在'}
         
-        # 检查是否为正文文档
-        if not file_info.is_zw:
-            logger.info(f"跳过非正文文档: {file_id}")
-            update_file_status(file_id, ProcessingStatus.SKIPPED, "非正文文档")
-            return {'success': False, 'error': '非正文文档'}
+        # 步骤0: 文件筛选检查
+        logger.info(f"开始文件筛选检查: {file_id}")
+        filter_result = file_filter.should_process_file(file_info)
+
+        if not filter_result['should_process']:
+            logger.info(f"文件筛选未通过: {file_id} - {filter_result['skip_reason']}")
+            update_file_status(file_id, ProcessingStatus.SKIPPED, f"筛选未通过: {filter_result['skip_reason']}")
+            log_processing_step(file_id, "filter_check", "skipped",
+                              f"筛选未通过: {filter_result['skip_reason']} (应用筛选器: {', '.join(filter_result['filters_applied'])})")
+            return {
+                'success': False,
+                'error': filter_result['skip_reason'],
+                'filter_result': filter_result
+            }
+
+        logger.info(f"文件筛选通过: {file_id} (应用筛选器: {', '.join(filter_result['filters_applied'])})")
+        log_processing_step(file_id, "filter_check", "success",
+                          f"筛选通过 (应用筛选器: {', '.join(filter_result['filters_applied'])})")
         
         update_file_status(file_id, ProcessingStatus.DOWNLOADING, "开始下载")
         
@@ -107,8 +147,9 @@ def process_document(self, file_id: str):
         try:
             file_data = s3_service.download_file(file_info.imagefileid, file_info.tokenkey)
             step_duration = (datetime.now() - step_start).seconds
-            log_processing_step(file_id, "download", "success", 
+            log_processing_step(file_id, "download", "success",
                               f"下载成功，大小: {len(file_data)} 字节", step_duration)
+
         except Exception as e:
             step_duration = (datetime.now() - step_start).seconds
             error_msg = f"下载失败: {str(e)}"
@@ -221,12 +262,10 @@ def process_document(self, file_id: str):
                               f"分析完成 [分类: {file_info.business_category.value}]，适合知识库: {analysis_result['suitable_for_kb']}, 目标知识库: {kb_info}", 
                               step_duration)
             
-            # 保存分析结果和目标知识库
+            # 保存分析结果
             file_info.ai_analysis_result = json.dumps(analysis_result, ensure_ascii=False)
             file_info.ai_confidence_score = analysis_result['confidence_score']
             file_info.should_add_to_kb = analysis_result['suitable_for_kb']
-            if target_knowledge_base:
-                file_info.target_knowledge_base_id = target_knowledge_base.id
             
         except Exception as e:
             step_duration = (datetime.now() - step_start).seconds
@@ -358,11 +397,39 @@ def batch_process_documents(limit: int = 10):
     try:
         db = get_db_session()
         
-        # 查询待处理的正文文档
+        # 查询待处理的正文文档，排除已跳过的文档
         pending_files = db.query(OAFileInfo).filter(
             OAFileInfo.is_zw == True,
             OAFileInfo.processing_status == ProcessingStatus.PENDING
-        ).limit(limit).all()
+        ).limit(limit * 2).all()  # 获取更多文件用于预筛选
+
+        # 预筛选文件，只处理通过筛选的文件
+        filtered_files = []
+        skipped_count = 0
+
+        for file_info in pending_files:
+            if len(filtered_files) >= limit:
+                break
+
+            # 进行基础筛选（不包含文件数据的筛选）
+            filter_result = file_filter.should_process_file(file_info)
+
+            if filter_result['should_process']:
+                filtered_files.append(file_info)
+            else:
+                # 直接标记为跳过
+                try:
+                    update_file_status(file_info.imagefileid, ProcessingStatus.SKIPPED,
+                                     f"批量处理筛选未通过: {filter_result['skip_reason']}")
+                    log_processing_step(file_info.imagefileid, "batch_filter", "skipped",
+                                      f"批量筛选: {filter_result['skip_reason']}")
+                    skipped_count += 1
+                    logger.info(f"批量处理跳过文件: {file_info.imagefilename} - {filter_result['skip_reason']}")
+                except Exception as e:
+                    logger.error(f"更新跳过状态失败 {file_info.imagefileid}: {e}")
+
+        logger.info(f"批量处理预筛选完成: 原始 {len(pending_files)} 个，筛选后 {len(filtered_files)} 个，跳过 {skipped_count} 个")
+        pending_files = filtered_files
         
         logger.info(f"找到 {len(pending_files)} 个待处理文档")
         
@@ -456,10 +523,9 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
                     log_processing_step(file_id, "manual_approve", "failed", error_msg)
                     return {'success': False, 'error': error_msg}
 
-                # 查询对应的知识库并创建Dify服务对象
-                target_kb = None
-                if file_info.target_knowledge_base_id:
-                    target_kb = file_info.target_knowledge_base
+                # 根据业务分类查询对应的知识库并创建Dify服务对象
+                target_kb = ai_analyzer.get_target_knowledge_base(file_info.business_category, db)
+                if target_kb:
                     dify_service_instance = multi_kb_manager.get_service_for_knowledge_base(target_kb)
                     logger.info(f"使用目标知识库服务: {target_kb.name}")
                 else:
