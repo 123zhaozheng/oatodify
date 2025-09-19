@@ -127,7 +127,7 @@ class AIAnalyzer:
 请从以下维度进行评估并返回JSON格式结果：
 1. suitable_for_kb: 是否适合加入知识库 (true/false)
 2. confidence_score: 置信度 (0-100)
-3. category: 文档类别 (contract/policy/report/manual/notice/other)
+3. category: 文档类别 (headquarters_issue/retail_announcement/publication_release/branch_issue/branch_receive/public_standard/headquarters_receive/corporate_announcement/other)
 4. reasons: 判断理由列表
 5. summary: 文档内容摘要 (50字以内)
 6. key_topics: 关键主题列表 (最多5个)
@@ -152,7 +152,7 @@ class AIAnalyzer:
         suitable = True
         confidence = 60  # 规则分析的置信度较低
         reasons = []
-        category = "other"
+        category = "public_standard"  # 默认为公共发布及规范文件
         quality_score = 50
         
         # 文件名分析
@@ -194,11 +194,14 @@ class AIAnalyzer:
         
         # 分类关键词
         category_keywords = {
-            'contract': ['合同', '协议', '甲方', '乙方', 'contract', 'agreement'],
-            'policy': ['政策', '制度', '规定', '管理办法', 'policy', 'regulation'],
-            'report': ['报告', '分析', '总结', '统计', 'report', 'analysis'],
-            'manual': ['手册', '指南', '操作', '使用说明', 'manual', 'guide'],
-            'notice': ['通知', '公告', '通告', 'notice', 'announcement']
+            'headquarters_issue': ['总行发文', '总行', '本行发文', '总行文件'],
+            'retail_announcement': ['零售', '零售业务', '个人业务', '零售条线'],
+            'publication_release': ['刊物', '期刊', '通讯', '简报', '刊物发布'],
+            'branch_issue': ['支行发文', '分行发文', '网点发文', '支行文件'],
+            'branch_receive': ['支行收文', '分行收文', '网点收文'],
+            'public_standard': ['规范', '制度', '管理办法', '操作规程', '公共发布', '规范文件'],
+            'headquarters_receive': ['总行收文', '上级文件', '总行来文'],
+            'corporate_announcement': ['公司', '公司业务', '对公业务', '公司条线']
         }
         
         for cat, keywords in category_keywords.items():

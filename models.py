@@ -7,11 +7,14 @@ from datetime import datetime
 Base = declarative_base()
 
 class BusinessCategory(str, Enum):
-    CONTRACT = "contract"
-    REPORT = "report"
-    NOTICE = "notice"
-    POLICY = "policy"
-    OTHER = "other"
+    HEADQUARTERS_ISSUE = "headquarters_issue"  # 总行发文
+    RETAIL_ANNOUNCEMENT = "retail_announcement"  # 零售条线公告
+    PUBLICATION_RELEASE = "publication_release"  # 刊物发布
+    BRANCH_ISSUE = "branch_issue"  # 支行发文
+    BRANCH_RECEIVE = "branch_receive"  # 支行收文
+    PUBLIC_STANDARD = "public_standard"  # 公共发布及规范文件
+    HEADQUARTERS_RECEIVE = "headquarters_receive"  # 总行收文
+    CORPORATE_ANNOUNCEMENT = "corporate_announcement"  # 公司条线公告
 
 class ProcessingStatus(str, Enum):
     PENDING = "pending"
