@@ -214,7 +214,7 @@ def show_file_detail(file_id, filename):
 def get_pending_approval_files():
     """获取待审核文档列表"""
     try:
-        url = get_files_api_url("?status=awaiting_approval&is_zw=true")
+        url = get_files_api_url("?status=AWAITING_APPROVAL&is_zw=true")
         response = requests.get(url, timeout=15)
         response.raise_for_status()
         data = response.json()

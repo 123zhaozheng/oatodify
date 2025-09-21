@@ -303,10 +303,10 @@ def show_system_health(system_snapshot: Dict[str, Any], s3_overview: Dict[str, A
     st.markdown("**处理队列概览**")
     queue_cols = st.columns(4)
     queue_metrics = [
-        ("待处理", queue.get("pending", 0)),
+        ("待处理", queue.get("PENDING", 0)),
         ("处理中", queue.get("in_progress", 0)),
-        ("待审核", queue.get("awaiting_approval", 0)),
-        ("失败", queue.get("failed", 0)),
+        ("待审核", queue.get("AWAITING_APPROVAL", 0)),
+        ("失败", queue.get("FAILED", 0)),
     ]
     for col, (label, value) in zip(queue_cols, queue_metrics):
         with col:

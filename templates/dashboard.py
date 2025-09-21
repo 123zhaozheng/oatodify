@@ -157,7 +157,7 @@ def show_dashboard():
         
         with col3:
             # 计算处理队列积压
-            pending_count = status_data.get('pending', 0)
+            pending_count = status_data.get('PENDING', 0)
             if pending_count > 10:
                 st.warning(f"📥 积压队列: {pending_count} 个")
             else:

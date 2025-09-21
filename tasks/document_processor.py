@@ -122,23 +122,23 @@ def process_document(self, file_id: str):
             return {'success': False, 'error': '文件信息不存在'}
         
         # 步骤0: 文件筛选检查
-        logger.info(f"开始文件筛选检查: {file_id}")
-        filter_result = file_filter.should_process_file(file_info)
+        # logger.info(f"开始文件筛选检查: {file_id}")
+        # filter_result = file_filter.should_process_file(file_info)
 
-        if not filter_result['should_process']:
-            logger.info(f"文件筛选未通过: {file_id} - {filter_result['skip_reason']}")
-            update_file_status(file_id, ProcessingStatus.SKIPPED, f"筛选未通过: {filter_result['skip_reason']}")
-            log_processing_step(file_id, "filter_check", "skipped",
-                              f"筛选未通过: {filter_result['skip_reason']} (应用筛选器: {', '.join(filter_result['filters_applied'])})")
-            return {
-                'success': False,
-                'error': filter_result['skip_reason'],
-                'filter_result': filter_result
-            }
+        # if not filter_result['should_process']:
+        #     logger.info(f"文件筛选未通过: {file_id} - {filter_result['skip_reason']}")
+        #     update_file_status(file_id, ProcessingStatus.SKIPPED, f"筛选未通过: {filter_result['skip_reason']}")
+        #     log_processing_step(file_id, "filter_check", "skipped",
+        #                       f"筛选未通过: {filter_result['skip_reason']} (应用筛选器: {', '.join(filter_result['filters_applied'])})")
+        #     return {
+        #         'success': False,
+        #         'error': filter_result['skip_reason'],
+        #         'filter_result': filter_result
+        #     }
 
-        logger.info(f"文件筛选通过: {file_id} (应用筛选器: {', '.join(filter_result['filters_applied'])})")
-        log_processing_step(file_id, "filter_check", "success",
-                          f"筛选通过 (应用筛选器: {', '.join(filter_result['filters_applied'])})")
+        # logger.info(f"文件筛选通过: {file_id} (应用筛选器: {', '.join(filter_result['filters_applied'])})")
+        # log_processing_step(file_id, "filter_check", "success",
+        #                   f"筛选通过 (应用筛选器: {', '.join(filter_result['filters_applied'])})")
         
         update_file_status(file_id, ProcessingStatus.DOWNLOADING, "开始下载")
         

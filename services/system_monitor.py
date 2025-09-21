@@ -226,23 +226,23 @@ def get_queue_statistics() -> Dict[str, int]:
         )
         return {
             "total": sum(counts.values()),
-            "pending": counts.get(ProcessingStatus.PENDING.value, 0),
+            "PENDING": counts.get(ProcessingStatus.PENDING.value, 0),
             "in_progress": in_progress,
-            "awaiting_approval": counts.get(ProcessingStatus.AWAITING_APPROVAL.value, 0),
-            "completed": counts.get(ProcessingStatus.COMPLETED.value, 0),
-            "failed": counts.get(ProcessingStatus.FAILED.value, 0),
-            "skipped": counts.get(ProcessingStatus.SKIPPED.value, 0),
+            "AWAITING_APPROVAL": counts.get(ProcessingStatus.AWAITING_APPROVAL.value, 0),
+            "COMPLETED": counts.get(ProcessingStatus.COMPLETED.value, 0),
+            "FAILED": counts.get(ProcessingStatus.FAILED.value, 0),
+            "SKIPPED": counts.get(ProcessingStatus.SKIPPED.value, 0),
         }
     except SQLAlchemyError as exc:
         logger.warning("Queue statistics query failed: %s", exc)
         return {
             "total": 0,
-            "pending": 0,
+            "PENDING": 0,
             "in_progress": 0,
-            "awaiting_approval": 0,
-            "completed": 0,
-            "failed": 0,
-            "skipped": 0,
+            "AWAITING_APPROVAL": 0,
+            "COMPLETED": 0,
+            "FAILED": 0,
+            "SKIPPED": 0,
             "error": _normalize_exception(exc),
         }
     finally:
@@ -266,7 +266,7 @@ def get_recent_errors(limit: int = 5) -> List[Dict[str, Any]]:
     try:
         logs = (
             session.query(ProcessingLog)
-            .filter(ProcessingLog.status == "failed")
+            .filter(ProcessingLog.status == "FAILED")
             .order_by(ProcessingLog.created_at.desc())
             .limit(limit)
             .all()

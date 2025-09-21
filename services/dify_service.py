@@ -513,15 +513,26 @@ class DifyService:
             docs_resp = self.session.get(docs_url, timeout=10)
             if docs_resp.status_code == 200:
                 docs_payload = docs_resp.json()
-                data = docs_payload.get('data') or docs_payload
-                pagination = data.get('pagination') or docs_payload.get('pagination') or {}
-                total = pagination.get('total') or data.get('total') or docs_payload.get('total')
-                if isinstance(total, int):
-                    overview['document_total'] = total
+
+                # Handle case where API returns a list directly
+                if isinstance(docs_payload, list):
+                    overview['document_total'] = len(docs_payload)
+                    overview['pagination'] = {}
                 else:
-                    documents = data.get('data') or data.get('documents') or []
-                    overview['document_total'] = len(documents)
-                overview['pagination'] = pagination
+                    # Handle normal dictionary response
+                    data = docs_payload.get('data') or docs_payload
+                    if isinstance(data, list):
+                        overview['document_total'] = len(data)
+                        overview['pagination'] = docs_payload.get('pagination') or {}
+                    else:
+                        pagination = data.get('pagination') or docs_payload.get('pagination') or {}
+                        total = pagination.get('total') or data.get('total') or docs_payload.get('total')
+                        if isinstance(total, int):
+                            overview['document_total'] = total
+                        else:
+                            documents = data.get('data') or data.get('documents') or []
+                            overview['document_total'] = len(documents) if isinstance(documents, list) else 0
+                        overview['pagination'] = pagination
             else:
                 overview['success'] = False
                 overview['documents_error'] = f"{docs_resp.status_code}: {docs_resp.text}"

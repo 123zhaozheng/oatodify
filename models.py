@@ -8,31 +8,31 @@ from datetime import datetime
 Base = declarative_base()
 
 class BusinessCategory(str, Enum):
-    HEADQUARTERS_ISSUE = "headquarters_issue"  # 总行发文
-    RETAIL_ANNOUNCEMENT = "retail_announcement"  # 零售条线公告
-    PUBLICATION_RELEASE = "publication_release"  # 刊物发布
-    BRANCH_ISSUE = "branch_issue"  # 支行发文
-    BRANCH_RECEIVE = "branch_receive"  # 支行收文
-    PUBLIC_STANDARD = "public_standard"  # 公共发布及规范文件
-    HEADQUARTERS_RECEIVE = "headquarters_receive"  # 总行收文
-    CORPORATE_ANNOUNCEMENT = "corporate_announcement"  # 公司条线公告
+    HEADQUARTERS_ISSUE = "HEADQUARTERS_ISSUE"  # 总行发文
+    RETAIL_ANNOUNCEMENT = "RETAIL_ANNOUNCEMENT"  # 零售条线公告
+    PUBLICATION_RELEASE = "PUBLICATION_RELEASE"  # 刊物发布
+    BRANCH_ISSUE = "BRANCH_ISSUE"  # 支行发文
+    BRANCH_RECEIVE = "BRANCH_RECEIVE"  # 支行收文
+    PUBLIC_STANDARD = "PUBLIC_STANDARD"  # 公共发布及规范文件
+    HEADQUARTERS_RECEIVE = "HEADQUARTERS_RECEIVE"  # 总行收文
+    CORPORATE_ANNOUNCEMENT = "CORPORATE_ANNOUNCEMENT"  # 公司条线公告
 
 class ProcessingStatus(str, Enum):
-    PENDING = "pending"
-    DOWNLOADING = "downloading"
-    DECRYPTING = "decrypting"
-    PARSING = "parsing"
-    ANALYZING = "analyzing"
-    AWAITING_APPROVAL = "awaiting_approval"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
+    PENDING = "PENDING"
+    DOWNLOADING = "DOWNLOADING"
+    DECRYPTING = "DECRYPTING"
+    PARSING = "PARSING"
+    ANALYZING = "ANALYZING"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
 
 class KnowledgeBaseStatus(str, Enum):
     """知识库状态枚举"""
-    ACTIVE = "active"      # 激活
-    INACTIVE = "inactive"  # 停用
-    MAINTENANCE = "maintenance"  # 维护中
+    ACTIVE = "ACTIVE"      # 激活
+    INACTIVE = "INACTIVE"  # 停用
+    MAINTENANCE = "MAINTENANCE"  # 维护中
 
 class KnowledgeBase(Base):
     """知识库信息表"""
@@ -134,7 +134,7 @@ class OAFileInfo(Base):
     
     
     # 关联的Document ID（处理成功后）
-    document_id = Column(Integer, comment="关联的documents表ID")
+    document_id = Column(Integer, comment="Dify知识库中的文档ID")
     
     # 同步信息
     sync_source = Column(String(50), default="oa_system", comment="同步来源")

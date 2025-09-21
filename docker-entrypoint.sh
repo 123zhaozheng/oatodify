@@ -104,16 +104,16 @@ start_celery_flower() {
         --port=5555
 }
 
-# 运行数据库迁移
-run_migrations() {
-    echo "📊 运行数据库迁移..."
-    python -c "
-from database import init_db
-print('初始化数据库...')
-init_db()
-print('✅ 数据库初始化完成')
-    "
-}
+# # 运行数据库迁移
+# run_migrations() {
+#     echo "📊 运行数据库迁移..."
+#     python -c "
+# from database import init_db
+# print('初始化数据库...')
+# init_db()
+# print('✅ 数据库初始化完成')
+#     "
+# }
 
 # 显示帮助信息
 show_help() {
@@ -165,7 +165,7 @@ main() {
             if [[ "${SKIP_HEALTH_CHECK:-false}" != "true" ]]; then
                 wait_for_services
             fi
-            run_migrations
+            # run_migrations
             start_fastapi
             ;;
         "streamlit")

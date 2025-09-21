@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 
 from models import OAFileInfo, ProcessingStatus, BusinessCategory
-from utils.file_utils import FileTypeDetector, format_file_size
+from utils.file_utils import  format_file_size
 from database import get_db_session
 from config import settings
 
@@ -99,15 +99,15 @@ class FileFilter:
                 return result
 
             # 2. 文件类型检测和筛选
-            if file_data:
-                type_check = self._check_file_type(file_info, file_data)
-                result['file_type_info'] = type_check
-                result['filters_applied'].append('file_type_detection')
+            # if file_data:
+            #     type_check = self._check_file_type(file_info, file_data)
+            #     result['file_type_info'] = type_check
+            #     result['filters_applied'].append('file_type_detection')
 
-                if not type_check.get('is_processable', True):
-                    result['should_process'] = False
-                    result['skip_reason'] = f"文件类型不支持: {type_check.get('file_type', 'unknown')}"
-                    return result
+            #     if not type_check.get('is_processable', True):
+            #         result['should_process'] = False
+            #         result['skip_reason'] = f"文件类型不支持: {type_check.get('file_type', 'unknown')}"
+            #         return result
 
             # 3. 关键字筛选（根据业务分类使用不同关键字）
             if self.config['enable_keyword_filter']:
