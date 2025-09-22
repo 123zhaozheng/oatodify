@@ -125,11 +125,12 @@ class DocumentProcessor:
 2. 关注对分支机构的实用性
 3. 评估制度规范的完整性和可操作性
 4. 注意文件的时效性和适用范围
+5. **重点关注版本管理信息**
 
 重点关注字段：
-- policy_level: 政策层级 (strategic/operational/guidance)
-- target_audience: 目标受众 (all_branches/specific_departments/management)
-- implementation_difficulty: 执行难度 (low/medium/high)
+- version_number: 当前版本号（从文档中提取）
+- old_version_number: 旧版本号（如文档中提及）
+- document_action: 对旧版本的操作（新增/废除/修订）
             """,
             BusinessCategory.RETAIL_ANNOUNCEMENT: """
 分析要求：
@@ -137,11 +138,11 @@ class DocumentProcessor:
 2. 关注客户服务改进价值
 3. 分析产品营销策略的可复制性
 4. 评估合规要求的明确性
+5. **重点关注文档的生效和失效日期**
 
 重点关注字段：
-- service_impact: 服务影响 (customer_facing/internal_process/both)
-- product_relevance: 产品相关性 (high/medium/low)
-- training_value: 培训价值 (high/medium/low)
+- effective_date: 生效日期（从文档中提取）
+- expiration_date: 失效日期（从文档中提取，如永久有效则填"永久"）
             """,
             BusinessCategory.PUBLICATION_RELEASE: """
 分析要求：
@@ -149,11 +150,11 @@ class DocumentProcessor:
 2. 关注知识传播和学习价值
 3. 分析内容的参考价值和可引用性
 4. 注意版权和引用规范
+5. **重点关注文档的生效和失效日期**
 
 重点关注字段：
-- information_type: 信息类型 (news/analysis/case_study/research)
-- reference_value: 参考价值 (high/medium/low)
-- knowledge_depth: 知识深度 (basic/intermediate/advanced)
+- effective_date: 生效日期（从文档中提取）
+- expiration_date: 失效日期（从文档中提取，如永久有效则填"永久"）
             """,
             BusinessCategory.BRANCH_ISSUE: """
 分析要求：
@@ -161,11 +162,11 @@ class DocumentProcessor:
 2. 关注最佳实践的可复制性
 3. 分析地域适用性和普适性
 4. 评估创新做法的借鉴意义
+5. **重点关注文档的生效和失效日期**
 
 重点关注字段：
-- innovation_level: 创新程度 (high/medium/low)
-- replicability: 可复制性 (high/medium/low)
-- regional_specificity: 地域特殊性 (high/medium/low)
+- effective_date: 生效日期（从文档中提取）
+- expiration_date: 失效日期（从文档中提取，如永久有效则填"永久"）
             """,
             BusinessCategory.BRANCH_RECEIVE: """
 分析要求：
@@ -173,11 +174,11 @@ class DocumentProcessor:
 2. 关注操作流程的标准化程度
 3. 分析合规要求的明确性
 4. 评估执行效果的可衡量性
+5. **重点关注文档的生效和失效日期**
 
 重点关注字段：
-- execution_clarity: 执行清晰度 (clear/moderate/unclear)
-- compliance_level: 合规程度 (mandatory/recommended/optional)
-- measurability: 可衡量性 (quantifiable/qualitative/subjective)
+- effective_date: 生效日期（从文档中提取）
+- expiration_date: 失效日期（从文档中提取，如永久有效则填"永久"）
             """,
             BusinessCategory.PUBLIC_STANDARD: """
 分析要求：
@@ -185,11 +186,11 @@ class DocumentProcessor:
 2. 关注规范的适用范围和实用性
 3. 分析操作指导的详细程度
 4. 评估制度的可执行性
+5. **重点关注文档的生效和失效日期**
 
 重点关注字段：
-- standard_type: 标准类型 (technical/procedural/management)
-- authority_level: 权威程度 (regulatory/industry/internal)
-- detail_level: 详细程度 (comprehensive/moderate/basic)
+- effective_date: 生效日期（从文档中提取）
+- expiration_date: 失效日期（从文档中提取，如永久有效则填"永久"）
             """,
             BusinessCategory.HEADQUARTERS_RECEIVE: """
 分析要求：
@@ -197,11 +198,11 @@ class DocumentProcessor:
 2. 关注政策解读的准确性
 3. 分析执行要求的明确性
 4. 评估文档的权威性来源
+5. **重点关注文档的生效和失效日期**
 
 重点关注字段：
-- urgency_level: 紧急程度 (urgent/normal/low)
-- authority_source: 权威来源 (regulatory/supervisory/industry)
-- action_required: 需要行动 (immediate/planned/informational)
+- effective_date: 生效日期（从文档中提取）
+- expiration_date: 失效日期（从文档中提取，如永久有效则填"永久"）
             """,
             BusinessCategory.CORPORATE_ANNOUNCEMENT: """
 分析要求：
@@ -209,60 +210,32 @@ class DocumentProcessor:
 2. 关注对公客户服务的改进价值
 3. 分析业务流程优化的可行性
 4. 评估风险控制措施的有效性
+5. **重点关注文档的生效和失效日期**
 
 重点关注字段：
-- business_impact: 业务影响 (high/medium/low)
-- client_focus: 客户导向 (b2b_focused/internal_process/mixed)
-- risk_relevance: 风险相关性 (high/medium/low)
+- effective_date: 生效日期（从文档中提取）
+- expiration_date: 失效日期（从文档中提取，如永久有效则填"永久"）
             """
         }
         return requirements_map.get(self.category, "- 按照通用标准进行评估")
     
     def _get_category_specific_fields(self) -> Dict:
         """获取分类特定的输出字段"""
+        # 其他分类的日期相关字段
+        other_category_fields = {
+            "effective_date": {"type": "string", "description": "生效日期 (YYYY-MM-DD格式或文本描述)"},
+            "expiration_date": {"type": "string", "description": "失效日期 (YYYY-MM-DD格式或文本描述，如果永久有效可填'永久'或'无')"}
+        }
+        
         fields_map = {
             BusinessCategory.HEADQUARTERS_ISSUE: {
-                "policy_level": {"type": "string", "enum": ["strategic", "operational", "guidance"]},
-                "target_audience": {"type": "string", "enum": ["all_branches", "specific_departments", "management"]},
-                "implementation_difficulty": {"type": "string", "enum": ["low", "medium", "high"]}
-            },
-            BusinessCategory.RETAIL_ANNOUNCEMENT: {
-                "service_impact": {"type": "string", "enum": ["customer_facing", "internal_process", "both"]},
-                "product_relevance": {"type": "string", "enum": ["high", "medium", "low"]},
-                "training_value": {"type": "string", "enum": ["high", "medium", "low"]}
-            },
-            BusinessCategory.PUBLICATION_RELEASE: {
-                "information_type": {"type": "string", "enum": ["news", "analysis", "case_study", "research"]},
-                "reference_value": {"type": "string", "enum": ["high", "medium", "low"]},
-                "knowledge_depth": {"type": "string", "enum": ["basic", "intermediate", "advanced"]}
-            },
-            BusinessCategory.BRANCH_ISSUE: {
-                "innovation_level": {"type": "string", "enum": ["high", "medium", "low"]},
-                "replicability": {"type": "string", "enum": ["high", "medium", "low"]},
-                "regional_specificity": {"type": "string", "enum": ["high", "medium", "low"]}
-            },
-            BusinessCategory.BRANCH_RECEIVE: {
-                "execution_clarity": {"type": "string", "enum": ["clear", "moderate", "unclear"]},
-                "compliance_level": {"type": "string", "enum": ["mandatory", "recommended", "optional"]},
-                "measurability": {"type": "string", "enum": ["quantifiable", "qualitative", "subjective"]}
-            },
-            BusinessCategory.PUBLIC_STANDARD: {
-                "standard_type": {"type": "string", "enum": ["technical", "procedural", "management"]},
-                "authority_level": {"type": "string", "enum": ["regulatory", "industry", "internal"]},
-                "detail_level": {"type": "string", "enum": ["comprehensive", "moderate", "basic"]}
-            },
-            BusinessCategory.HEADQUARTERS_RECEIVE: {
-                "urgency_level": {"type": "string", "enum": ["urgent", "normal", "low"]},
-                "authority_source": {"type": "string", "enum": ["regulatory", "supervisory", "industry"]},
-                "action_required": {"type": "string", "enum": ["immediate", "planned", "informational"]}
-            },
-            BusinessCategory.CORPORATE_ANNOUNCEMENT: {
-                "business_impact": {"type": "string", "enum": ["high", "medium", "low"]},
-                "client_focus": {"type": "string", "enum": ["b2b_focused", "internal_process", "mixed"]},
-                "risk_relevance": {"type": "string", "enum": ["high", "medium", "low"]}
+                # 总行发文特有的版本相关字段
+                "version_number": {"type": "string", "description": "当前版本号"},
+                "old_version_number": {"type": "string", "description": "旧版本号（如存在）"},
+                "document_action": {"type": "string", "enum": ["新增", "废除", "修订"], "description": "对旧版本的操作类型"}
             }
         }
-        return fields_map.get(self.category, {})
+        return fields_map.get(self.category, other_category_fields)
 
 class AIAnalyzer:
     """增强版AI文档分析服务 - 支持分类特定的处理逻辑"""
@@ -416,6 +389,13 @@ class AIAnalyzer:
                 content_result = response.choices[0].message.content or "{}"
                 result = json.loads(content_result)
                 
+                # 收集分类特定的字段到ai_metadata中
+                ai_metadata = {}
+                category_fields = processor._get_category_specific_fields()
+                for field_name in category_fields.keys():
+                    if field_name in result:
+                        ai_metadata[field_name] = result[field_name]
+                
                 # 标准化结果格式
                 analysis_result = {
                     "suitable_for_kb": result.get("suitable_for_kb", False),
@@ -428,18 +408,13 @@ class AIAnalyzer:
                     "analysis_method": "ai",
                     "model_version": self.model_name,
                     "json_output_method": processor.json_output_method,
+                    "ai_metadata": ai_metadata,
                     "processor_config": {
                         "category": category.value,
                         "min_confidence": processor.min_confidence,
                         "auto_approve_threshold": processor.auto_approve_threshold
                     }
                 }
-                
-                # 添加分类特定的字段
-                category_fields = processor._get_category_specific_fields()
-                for field_name in category_fields.keys():
-                    if field_name in result:
-                        analysis_result[field_name] = result[field_name]
                 
                 # 应用分类特定的质量控制
                 if analysis_result["confidence_score"] < processor.min_confidence:
