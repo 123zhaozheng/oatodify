@@ -47,13 +47,12 @@ class S3Service:
             logger.warning(f"S3客户端初始化失败: {e}, S3服务不可用")
             self.client = None
     
-    def download_file(self, file_key: str, token_key: Optional[str] = None) -> bytes:
+    def download_file(self, token_key: str) -> bytes:
         """
         从S3下载文件
         
         Args:
-            file_key: 文件在S3中的键值
-            token_key: 访问令牌（如果需要）
+            token_key: OSS下载key，文件在S3中的键值
             
         Returns:
             文件的二进制数据
@@ -66,16 +65,10 @@ class S3Service:
             # 构建下载参数
             download_params = {
                 'Bucket': settings.s3_bucket_name,
-                'Key': file_key
+                'Key': token_key
             }
             
-            # 如果有token_key，添加自定义请求头
-            if token_key:
-                # 对于get_object，自定义元数据应该在响应中查找，而不是请求中设置
-                # 如果需要身份验证，应该设置适当的请求头
-                pass  # TODO: 根据实际S3服务要求配置token认证
-            
-            logger.info(f"开始下载文件: {file_key}")
+            logger.info(f"开始下载文件: {token_key}")
             
             # 下载文件到内存
             response = self.client.get_object(**download_params)
@@ -99,26 +92,26 @@ class S3Service:
             logger.error(f"下载文件时发生未知错误: {e}")
             raise
     
-    def check_file_exists(self, file_key: str) -> bool:
+    def check_file_exists(self, token_key: str) -> bool:
         """检查文件是否存在"""
         if not self.client:
             logger.error("S3客户端未初始化，无法检查文件")
             return False
             
         try:
-            self.client.head_object(Bucket=settings.s3_bucket_name, Key=file_key)
+            self.client.head_object(Bucket=settings.s3_bucket_name, Key=token_key)
             return True
         except ClientError:
             return False
     
-    def get_file_info(self, file_key: str) -> dict:
+    def get_file_info(self, token_key: str) -> dict:
         """获取文件信息"""
         if not self.client:
             logger.error("S3客户端未初始化，无法获取文件信息")
             raise RuntimeError("S3服务不可用")
             
         try:
-            response = self.client.head_object(Bucket=settings.s3_bucket_name, Key=file_key)
+            response = self.client.head_object(Bucket=settings.s3_bucket_name, Key=token_key)
             return {
                 'size': response['ContentLength'],
                 'last_modified': response['LastModified'],

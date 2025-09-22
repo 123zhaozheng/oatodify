@@ -127,31 +127,31 @@ class DecryptionService:
             return False
     
     @staticmethod
-    def extract_zip_files(zip_data: bytes) -> dict:
+    def extract_zip_files(zip_data: bytes) -> bytes:
         """
-        提取ZIP文件中的所有文件
-        
+        提取ZIP文件中唯一文件的二进制内容。
+
+        假设ZIP内只有一个文件且文件名无需返回，只返回解出的二进制数据。
+
         Returns:
-            dict: 文件名 -> 文件内容的映射
+            bytes: ZIP内文件的二进制内容
         """
-        extracted_files = {}
         try:
             with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as zip_ref:
-                for filename in zip_ref.namelist():
-                    # 跳过目录
-                    if filename.endswith('/'):
-                        continue
-                    
-                    try:
-                        file_content = zip_ref.read(filename)
-                        extracted_files[filename] = file_content
-                        logger.info(f"提取文件: {filename} ({len(file_content)} 字节)")
-                    except Exception as e:
-                        logger.error(f"提取文件 {filename} 失败: {e}")
-            
-            logger.info(f"总共提取了 {len(extracted_files)} 个文件")
-            return extracted_files
-            
+                # 过滤出非目录条目
+                file_names = [name for name in zip_ref.namelist() if not name.endswith('/')]
+
+                if not file_names:
+                    raise ValueError("ZIP文件中未找到文件")
+
+                if len(file_names) > 1:
+                    logger.warning(f"ZIP内含 {len(file_names)} 个文件，按约定仅取第一个")
+
+                first_file = file_names[0]
+                file_content = zip_ref.read(first_file)
+                logger.info(f"提取文件(首个): {first_file} ({len(file_content)} 字节)")
+                return file_content
+
         except Exception as e:
             logger.error(f"提取ZIP文件失败: {e}")
             raise

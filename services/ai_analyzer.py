@@ -326,12 +326,12 @@ class AIAnalyzer:
             DocumentCategoryMapping.is_active == True
         ).first()
         
-        if mapping and mapping.knowledge_base.status == 'active':
+        if mapping and mapping.knowledge_base.status == 'ACTIVE':
             return mapping.knowledge_base
         
         # 如果没有找到特定映射，返回默认知识库
         default_kb = db.query(KnowledgeBase).filter(
-            KnowledgeBase.status == 'active'
+            KnowledgeBase.status == 'ACTIVE'
         ).first()
         
         if default_kb:

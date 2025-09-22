@@ -145,7 +145,7 @@ def process_document(self, file_id: str):
         # 步骤1: 从S3下载文档
         step_start = datetime.now()
         try:
-            file_data = s3_service.download_file(file_info.imagefileid, file_info.tokenkey)
+            file_data = s3_service.download_file(file_info.tokenkey)
             step_duration = (datetime.now() - step_start).seconds
             log_processing_step(file_id, "download", "success",
                               f"下载成功，大小: {len(file_data)} 字节", step_duration)
@@ -192,19 +192,14 @@ def process_document(self, file_id: str):
             final_file_content = decrypted_data
             final_filename = file_info.imagefilename
             
-            # 如果是ZIP文件，先提取
-            if file_info.is_zip or file_info.imagefilename.lower().endswith('.zip'):
-                extracted_files = decryption_service.extract_zip_files(decrypted_data)
-                # 选择最大的文档文件进行处理
-                if extracted_files:
-                    largest_file = max(extracted_files.items(), key=lambda x: len(x[1]))
-                    parse_result = api_document_parser.parse_document(largest_file[1], largest_file[0])
-                    # 更新为提取出的文件内容和名称，用于Dify上传
-                    final_file_content = largest_file[1]
-                    final_filename = largest_file[0]
-                    logger.info(f"ZIP文件处理：选择最大文件 {final_filename} ({len(final_file_content)} 字节) 用于知识库上传")
-                else:
-                    raise Exception("ZIP文件中没有找到可处理的文档")
+            # 如果是ZIP文件，先提取唯一文件的二进制内容
+            if file_info.is_zip :
+                extracted_content = decryption_service.extract_zip_files(decrypted_data)
+                parse_result = api_document_parser.parse_document(extracted_content, file_info.imagefilename)
+                # 更新为提取出的文件内容和最终文件名（来自数据库字段）
+                final_file_content = extracted_content
+                final_filename = file_info.imagefilename
+                logger.info(f"ZIP文件处理：使用单一文件 {final_filename} ({len(final_file_content)} 字节) 用于知识库上传")
             else:
                 parse_result = api_document_parser.parse_document(decrypted_data, file_info.imagefilename)
             
@@ -495,7 +490,7 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
 
                 # 重新从S3下载文档内容并解析
                 try:
-                    file_data = s3_service.download_file(file_info.imagefileid, file_info.tokenkey)
+                    file_data = s3_service.download_file(file_info.tokenkey)
                     logger.info(f"重新下载文件成功，准备解析并加入知识库: {file_info.imagefilename}")
 
                     # 解密文档
@@ -504,8 +499,12 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
                     else:
                         decrypted_data = file_data
 
-                    # 解析文档内容
-                    parse_result = api_document_parser.parse_document(decrypted_data, file_info.imagefilename)
+                    # 解析文档内容（与自动流程保持一致：ZIP需先解压取唯一文件内容）
+                    if file_info.is_zip:
+                        extracted_content = decryption_service.extract_zip_files(decrypted_data)
+                        parse_result = api_document_parser.parse_document(extracted_content, file_info.imagefilename)
+                    else:
+                        parse_result = api_document_parser.parse_document(decrypted_data, file_info.imagefilename)
 
                     if not parse_result['success']:
                         error_msg = f"重新解析文档失败: {parse_result['error']}"
