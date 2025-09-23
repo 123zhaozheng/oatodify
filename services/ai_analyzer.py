@@ -258,6 +258,7 @@ class AIAnalyzer:
         self.client = None
         self.model_name = settings.openai_model_name
         self.processors = {}  # 文档处理器缓存
+        self.max_analysis_length = getattr(settings, 'ai_analysis_max_length', 30000)
         self._init_client()
     
     def _init_client(self):
@@ -365,8 +366,14 @@ class AIAnalyzer:
                     logger.warning("OpenAI客户端未初始化，使用规则分析")
                     return self._rule_based_analysis(content, filename, file_info, metadata), target_kb
                 
+                # 仅供AI分析使用的内容截取，确保不会影响完整正文入库
+                analysis_content = content
+                if analysis_content and self.max_analysis_length and len(analysis_content) > self.max_analysis_length:
+                    logger.info(f"AI分析内容截断: 原始{len(analysis_content)}字符，取前{self.max_analysis_length}字符用于模型输入，完整内容仍用于知识库")
+                    analysis_content = analysis_content[:self.max_analysis_length]
+
                 # 获取特定分类的提示词
-                prompt = processor.get_prompt(content, filename, file_info, metadata)
+                prompt = processor.get_prompt(analysis_content, filename, file_info, metadata)
                 
                 # 构建消息
                 messages = [

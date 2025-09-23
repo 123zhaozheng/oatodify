@@ -80,10 +80,8 @@ class ApiDocumentParser:
                 # 拼接所有文本块内容
                 full_content = self._concatenate_chunks(chunks)
 
-                # 根据AI解析长度限制截取内容
                 if len(full_content) > self.ai_analysis_max_length:
-                    logger.info(f"文档内容过长({len(full_content)}字符)，截取前{self.ai_analysis_max_length}字符")
-                    full_content = full_content[:self.ai_analysis_max_length]
+                    logger.info(f"文档内容过长({len(full_content)}字符)，仅截取前{self.ai_analysis_max_length}字符供AI分析参考，不影响知识库入库")
 
                 # 构造元数据
                 metadata = {
