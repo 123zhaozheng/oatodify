@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import Dict, Optional, Tuple
 import logging
 from openai import OpenAI
@@ -28,7 +29,7 @@ class DocumentProcessor:
         """获取特定分类的AI提示词"""
         if self.prompt_template:
             # 使用数据库配置的提示词模板
-            return self.prompt_template.format(
+            base_prompt = self.prompt_template.format(
                 filename=filename,
                 content=content[:2000] + "..." if len(content) > 2000 else content,
                 file_type=metadata.get('file_type', 'unknown'),
@@ -39,6 +40,19 @@ class DocumentProcessor:
                 business_category=file_info.get('business_category', 'unknown'),
                 file_id=file_info.get('imagefileid', 'unknown')
             )
+            
+            # 根据JSON输出方式添加JSON格式要求
+            if self.json_output_method == 'prompt':
+                # 在提示词中限定JSON模板
+                schema = self.get_output_schema()
+                json_instruction = f"""
+
+请严格按照以下JSON格式返回结果：
+{json.dumps(schema, ensure_ascii=False, indent=2)}
+"""
+                base_prompt += json_instruction
+            
+            return base_prompt
         
         # 使用默认提示词模板
         return self._get_default_prompt(content, filename, file_info, metadata)
@@ -366,6 +380,9 @@ class AIAnalyzer:
                     }
                 ]
                 
+                # 记录AI请求日志
+                logger.info(f"AI分析请求 [文件: {filename}, 分类: {category.value}] - 消息内容: {json.dumps(messages, ensure_ascii=False)}")
+                
                 # 根据JSON输出方式调用不同的API
                 if processor.json_output_method == 'response_format':
                     # 使用response_format参数控制JSON输出
@@ -387,7 +404,18 @@ class AIAnalyzer:
                 
                 # 解析响应
                 content_result = response.choices[0].message.content or "{}"
-                result = json.loads(content_result)
+                
+                # 记录AI回复日志
+                logger.info(f"AI分析回复 [文件: {filename}, 分类: {category.value}] - 原始回复: {content_result}")
+                
+                # 清理markdown代码块标记
+                cleaned_content = self._clean_json_response(content_result)
+                
+                # 如果清理前后内容不同，记录清理日志
+                if cleaned_content != content_result:
+                    logger.info(f"AI回复JSON清理 [文件: {filename}] - 清理后内容: {cleaned_content}")
+                
+                result = json.loads(cleaned_content)
                 
                 # 收集分类特定的字段到ai_metadata中
                 ai_metadata = {}
@@ -433,6 +461,19 @@ class AIAnalyzer:
             logger.error(f"AI分析失败: {e}")
             # 降级到规则分析
             return self._rule_based_analysis(content, filename, file_info, metadata), None
+    
+    def _clean_json_response(self, content: str) -> str:
+        """清理AI回复中的markdown代码块标记"""
+        # 移除开头的```json或```
+        content = re.sub(r'^```(?:json)?\s*\n?', '', content.strip(), flags=re.IGNORECASE)
+        
+        # 移除结尾的```
+        content = re.sub(r'\n?```\s*$', '', content.strip())
+        
+        # 移除可能的额外空白字符
+        content = content.strip()
+        
+        return content
     
     def _rule_based_analysis(self, content: str, filename: str, file_info: Dict, metadata: Dict) -> Dict:
         """基于规则的文档分析（AI不可用时的降级方案）"""
