@@ -134,7 +134,7 @@ class OAFileInfo(Base):
     
     
     # 关联的Document ID（处理成功后）
-    document_id = Column(Integer, comment="Dify知识库中的文档ID")
+    document_id = Column(String(100), comment="Dify知识库中的文档ID")
     
     # 同步信息
     sync_source = Column(String(50), default="oa_system", comment="同步来源")

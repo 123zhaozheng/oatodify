@@ -17,7 +17,7 @@ class ApiDocumentParser:
             self.parse_api_url = "http://localhost:8080"
 
         # 文档解析配置
-        self.default_separators = ["\n\n\n", "\n\n", ".", ""]
+        self.default_separators = ["\n\n", "\n", ".", ""]
         self.default_separator_rules = ["after", "after", "after", "after"]
         self.default_chunk_size = 1000
         self.default_chunk_overlap = 200
@@ -175,8 +175,8 @@ class ApiDocumentParser:
             if chunk_content.strip():
                 content_parts.append(chunk_content.strip())
 
-        # 使用双换行符连接文本块，保持段落分隔
-        full_content = '\n\n'.join(content_parts)
+        # 使@@@@@符连接文本块，保持dify父切分连续性
+        full_content = '@@@@@'.join(content_parts)
 
         logger.info(f"拼接完成，共{len(chunks)}个文本块，总长度{len(full_content)}字符")
 

@@ -74,8 +74,9 @@ start_streamlit() {
         --server.address 0.0.0.0 \
         --server.port 8501 \
         --server.headless true \
-        --server.enableCORS false \
-        --server.enableXsrfProtection false
+        --server.enableCORS true \
+        --server.enableXsrfProtection false \
+        --server.allowRunOnSave true
 }
 
 # 启动 Celery Worker

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # OA文档处理系统 Docker Compose 配置
 # 应用服务栈：API、前端、Worker等（数据库和缓存使用外部服务）
 # =============================================================================
@@ -129,19 +129,55 @@ services:
       - .env  # 如果解析服务需要环境变量
     environment:
       # 解析服务专用的环境变量
-      - PARSER_PORT=8080
-      - PARSER_MAX_FILE_SIZE=100MB
+      - PYTHONIOENCODING=utf-8
+      - DOCSPLITTER_PDF_API_BASE_URI=http://10.195.33.123:18000
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
       # 添加其他你需要的环境变量
     ports:
       - "8080:5000"  # 映射解析服务端口
     volumes:
-      # 如果解析服务需要访问临时文件
-      - ./temp:/app/temp
+      # 映射解析服务源码与入口脚本
+      - /home/appuser/docspliter/src/:/app/src
+      - /home/appuser/docspliter/main.py:/app/main.py
       # 添加其他需要的数据卷
     restart: unless-stopped
     networks:
       - oa-network  # 加入同一个网络
 
+
+  # ===========================================
+  # PostgreSQL 数据库
+  # ===========================================
+  postgres:
+    image: postgres:15
+    container_name: oa-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=oa_docs
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Redis 缓存
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: oa-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - oa-network
 
   # ===========================================
   # Nginx 反向代理（可选 - 开发环境可以注释掉）
@@ -174,6 +210,10 @@ networks:
 # ===========================================
 volumes:
   beat_schedule:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
     driver: local
 
 # =============================================================================

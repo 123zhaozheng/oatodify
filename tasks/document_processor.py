@@ -1,4 +1,4 @@
-from celery import Celery
+﻿from celery import Celery
 from celery.signals import worker_ready
 import logging
 from datetime import datetime
@@ -580,7 +580,7 @@ from celery.schedules import crontab
 app.conf.beat_schedule = {
     'batch-process-documents': {
         'task': 'batch_process_documents',
-        'schedule': crontab(minute=0),  # 每小时执行一次
+        'schedule': crontab(minute='*/5'),  # 每5分钟执行一次
         'args': (20,)  # 每次处理20个文档
     },
 }
