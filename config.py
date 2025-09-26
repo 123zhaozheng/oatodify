@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # 应用配置
     secret_key: str = Field(default_factory=lambda: os.getenv("SECRET_KEY", "your-secret-key-here"))
     debug: bool = Field(default_factory=lambda: os.getenv("DEBUG", "False").lower() == "true")
+    base_url: str = Field(default_factory=lambda: os.getenv("BASE_URL", "http://localhost:8000"))
     
     # 文档处理配置
     max_file_size: int = Field(default=100 * 1024 * 1024)  # 100MB

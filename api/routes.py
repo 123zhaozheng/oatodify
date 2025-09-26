@@ -1,11 +1,12 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, case
 from typing import List, Optional
 from datetime import datetime, timedelta
 import json
+import io
 
 from database import get_db
 from models import OAFileInfo, ProcessingLog, ProcessingStatus, BusinessCategory
@@ -19,6 +20,8 @@ from services.system_monitor import (
     get_recent_errors as monitor_recent_errors,
     get_queue_statistics as monitor_queue_statistics,
 )
+from services.s3_service import s3_service
+from config import settings
 
 router = APIRouter()
 
@@ -475,3 +478,143 @@ async def get_system_queue():
         return monitor_queue_statistics()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取队列统计失败: {str(e)}")
+
+@router.get("/files/{imagefileid}/attachments", summary="获取文档附件信息")
+async def get_file_attachments(imagefileid: str, db: Session = Depends(get_db)):
+    """获取指定正文文档的所有附件信息及下载链接"""
+    try:
+        # 查询正文文档
+        main_file = db.query(OAFileInfo).filter(
+            and_(
+                OAFileInfo.imagefileid == imagefileid,
+                OAFileInfo.is_zw == True
+            )
+        ).first()
+        
+        if not main_file:
+            raise HTTPException(status_code=404, detail="正文文档不存在")
+        
+        # 解析附件ID列表
+        attachment_ids = []
+        if main_file.fj_imagefileid:
+            try:
+                attachment_ids = json.loads(main_file.fj_imagefileid)
+                if not isinstance(attachment_ids, list):
+                    attachment_ids = [attachment_ids] if attachment_ids else []
+            except json.JSONDecodeError:
+                # 如果不是JSON格式，尝试按逗号分割
+                attachment_ids = [id.strip() for id in main_file.fj_imagefileid.split(',') if id.strip()]
+        
+        if not attachment_ids:
+            return {
+                "main_file": {
+                    "imagefileid": main_file.imagefileid,
+                    "filename": main_file.imagefilename
+                },
+                "attachments": [],
+                "message": "该文档没有附件"
+            }
+        
+        # 查询附件信息
+        attachments = db.query(OAFileInfo).filter(
+            and_(
+                OAFileInfo.imagefileid.in_(attachment_ids),
+                OAFileInfo.is_zw == False
+            )
+        ).all()
+        
+        # 按文件名去重（保留最新的）
+        unique_attachments = {}
+        for attachment in attachments:
+            filename = attachment.imagefilename
+            if filename not in unique_attachments or attachment.created_at > unique_attachments[filename].created_at:
+                unique_attachments[filename] = attachment
+        
+        # 构建返回数据
+        attachment_list = []
+        base_url = getattr(settings, 'base_url', 'http://localhost:8000')  # 从设置获取基础URL
+        
+        for attachment in unique_attachments.values():
+            download_url = f"{base_url}/oafile/download/{attachment.imagefileid}"
+            
+            attachment_info = {
+                "imagefileid": attachment.imagefileid,
+                "imagefilename": attachment.imagefilename,
+                "downloadurl": download_url
+            }
+            attachment_list.append(attachment_info)
+        
+        return {
+            "main_file": {
+                "imagefileid": main_file.imagefileid,
+                "filename": main_file.imagefilename
+            },
+            "attachments": attachment_list,
+            "total_attachments": len(attachment_list),
+            "deduplication_info": {
+                "total_found": len(attachments),
+                "after_dedup": len(attachment_list),
+                "removed_duplicates": len(attachments) - len(attachment_list)
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取附件信息失败: {str(e)}")
+
+@router.get("/oafile/download/{imagefileid}", summary="下载文件")
+async def download_file(imagefileid: str, db: Session = Depends(get_db)):
+    """下载指定文件"""
+    try:
+        # 查询文件信息
+        file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == imagefileid).first()
+        
+        if not file_info:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        if not file_info.tokenkey:
+            raise HTTPException(status_code=400, detail="文件下载凭证不存在")
+        
+        # 从S3下载文件
+        try:
+            file_data = s3_service.download_file(file_info.tokenkey)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="文件在存储中不存在")
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="文件访问权限不足")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"下载文件失败: {str(e)}")
+        
+        # 确定文件的MIME类型
+        content_type = "application/octet-stream"
+        if file_info.imagefiletype:
+            ext = file_info.imagefiletype.lower()
+            if ext == "pdf":
+                content_type = "application/pdf"
+            elif ext in ["doc", "docx"]:
+                content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == "docx" else "application/msword"
+            elif ext == "txt":
+                content_type = "text/plain"
+            elif ext in ["jpg", "jpeg"]:
+                content_type = "image/jpeg"
+            elif ext == "png":
+                content_type = "image/png"
+        
+        # 创建文件流
+        file_stream = io.BytesIO(file_data)
+        
+        # 返回流式响应
+        return StreamingResponse(
+            io.BytesIO(file_data),
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{file_info.imagefilename}",
+                "Content-Length": str(len(file_data))
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"下载文件时发生错误: {str(e)}")
