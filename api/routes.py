@@ -10,7 +10,13 @@ import io
 
 from database import get_db
 from models import OAFileInfo, ProcessingLog, ProcessingStatus, BusinessCategory
-from tasks.document_processor import process_document, batch_process_documents, approve_document
+from tasks.document_processor import (
+    process_document,
+    batch_process_documents,
+    approve_document,
+    clean_headquarters_version_duplicates,
+    clean_expired_documents
+)
 from services.system_monitor import (
     get_system_snapshot,
     get_s3_overview,
@@ -569,13 +575,13 @@ async def download_file(imagefileid: str, db: Session = Depends(get_db)):
     try:
         # 查询文件信息
         file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == imagefileid).first()
-        
+
         if not file_info:
             raise HTTPException(status_code=404, detail="文件不存在")
-        
+
         if not file_info.tokenkey:
             raise HTTPException(status_code=400, detail="文件下载凭证不存在")
-        
+
         # 从S3下载文件
         try:
             file_data = s3_service.download_file(file_info.tokenkey)
@@ -585,7 +591,7 @@ async def download_file(imagefileid: str, db: Session = Depends(get_db)):
             raise HTTPException(status_code=403, detail="文件访问权限不足")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"下载文件失败: {str(e)}")
-        
+
         # 确定文件的MIME类型
         content_type = "application/octet-stream"
         if file_info.imagefiletype:
@@ -600,10 +606,10 @@ async def download_file(imagefileid: str, db: Session = Depends(get_db)):
                 content_type = "image/jpeg"
             elif ext == "png":
                 content_type = "image/png"
-        
+
         # 创建文件流
         file_stream = io.BytesIO(file_data)
-        
+
         # 返回流式响应
         return StreamingResponse(
             io.BytesIO(file_data),
@@ -613,8 +619,98 @@ async def download_file(imagefileid: str, db: Session = Depends(get_db)):
                 "Content-Length": str(len(file_data))
             }
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"下载文件时发生错误: {str(e)}")
+
+@router.post("/maintenance/clean-version-duplicates", summary="手动清理总行发文版本重复")
+async def manual_clean_version_duplicates(
+    limit: int = Query(50, ge=1, le=200, description="每次处理的文档数量限制")
+):
+    """
+    手动触发总行发文版本去重任务
+
+    - 检测文档名中的修订关键词
+    - 使用AI判断最新版本
+    - 删除旧版本文档
+    """
+    try:
+        # 提交异步任务
+        task = clean_headquarters_version_duplicates.delay(limit)
+
+        return {
+            "success": True,
+            "message": f"总行发文版本去重任务已提交，限制处理: {limit} 个文档",
+            "task_id": task.id,
+            "description": "任务将检测修订文档并清理旧版本，请查看日志了解详细进度"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"提交版本去重任务失败: {str(e)}")
+
+@router.post("/maintenance/clean-expired-documents", summary="手动清理过期文档")
+async def manual_clean_expired_documents(
+    limit: int = Query(50, ge=1, le=200, description="每次处理的文档数量限制")
+):
+    """
+    手动触发过期文档清理任务
+
+    - 检查ai_metadata中的expiration_date
+    - 对于没有元数据的文档，使用AI判断
+    - 删除过期文档
+    """
+    try:
+        # 提交异步任务
+        task = clean_expired_documents.delay(limit)
+
+        return {
+            "success": True,
+            "message": f"过期文档清理任务已提交，限制处理: {limit} 个文档",
+            "task_id": task.id,
+            "description": "任务将检查文档有效期并清理过期文档，请查看日志了解详细进度"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"提交过期文档清理任务失败: {str(e)}")
+
+class MaintenanceTaskStatus(BaseModel):
+    """维护任务状态查询请求"""
+    task_id: str
+
+@router.get("/maintenance/task-status/{task_id}", summary="查询维护任务状态")
+async def get_maintenance_task_status(task_id: str):
+    """
+    查询维护任务的执行状态
+
+    - task_id: 任务ID（从提交任务时返回）
+    """
+    try:
+        from celery.result import AsyncResult
+        from celery_app import app as celery_app
+
+        # 获取任务结果
+        task_result = AsyncResult(task_id, app=celery_app)
+
+        response = {
+            "task_id": task_id,
+            "state": task_result.state,
+            "ready": task_result.ready(),
+            "successful": task_result.successful() if task_result.ready() else None
+        }
+
+        # 如果任务完成，返回结果
+        if task_result.ready():
+            if task_result.successful():
+                response["result"] = task_result.result
+            else:
+                response["error"] = str(task_result.info)
+        else:
+            # 任务进行中
+            response["info"] = task_result.info if task_result.info else "任务正在执行中..."
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询任务状态失败: {str(e)}")

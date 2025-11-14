@@ -11,6 +11,7 @@ from services.api_document_parser import api_document_parser
 from services.ai_analyzer import ai_analyzer
 from services.dify_service import dify_service, multi_kb_manager
 from services.file_filter import file_filter
+from services.version_manager import version_manager
 from config import settings
 import json
 
@@ -466,7 +467,7 @@ def batch_process_documents(limit: int = 10):
 def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
     """
     人工审核文档 - 支持多知识库
-    
+
     Args:
         file_id: 文件ID
         approved: 是否通过审核
@@ -475,13 +476,13 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
     try:
         db = get_db_session()
         file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == file_id).first()
-        
+
         if not file_info:
             return {'success': False, 'error': '文件信息不存在'}
-        
+
         if file_info.processing_status != ProcessingStatus.AWAITING_APPROVAL:
             return {'success': False, 'error': '文档状态不正确，无法审核'}
-        
+
         if approved:
             # 审核通过，加入知识库
             try:
@@ -541,38 +542,90 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
                         'business_category': file_info.business_category.value if file_info.business_category else 'unknown'
                     }
                 )
-                
+
                 if dify_result['success']:
                     file_info.document_id = dify_result.get('document_id')
                     kb_name = dify_result.get('knowledge_base_name', target_kb.name if target_kb else 'unknown')
-                    update_file_status(file_id, ProcessingStatus.COMPLETED, 
+                    update_file_status(file_id, ProcessingStatus.COMPLETED,
                                      f"人工审核通过并加入知识库 [{kb_name}]: {reviewer_comment}")
-                    log_processing_step(file_id, "manual_approve", "success", 
+                    log_processing_step(file_id, "manual_approve", "success",
                                       f"审核通过，加入知识库 [{kb_name}]: {reviewer_comment}")
                 else:
                     error_msg = f"加入知识库失败: {dify_result['error']}"
                     update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
                     log_processing_step(file_id, "manual_approve", "failed", error_msg)
-                    
+
             except Exception as e:
                 error_msg = f"审核通过后处理失败: {str(e)}"
                 update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
                 log_processing_step(file_id, "manual_approve", "failed", error_msg)
         else:
             # 审核不通过，跳过
-            update_file_status(file_id, ProcessingStatus.SKIPPED, 
+            update_file_status(file_id, ProcessingStatus.SKIPPED,
                              f"人工审核未通过: {reviewer_comment}")
-            log_processing_step(file_id, "manual_reject", "success", 
+            log_processing_step(file_id, "manual_reject", "success",
                               f"审核未通过: {reviewer_comment}")
-        
+
         db.commit()
         db.close()
-        
+
         return {'success': True, 'approved': approved}
-        
+
     except Exception as e:
         logger.error(f"人工审核失败: {e}")
         return {'success': False, 'error': str(e)}
+
+@app.task(name='clean_headquarters_version_duplicates')
+def clean_headquarters_version_duplicates(limit: int = 50):
+    """
+    清理总行发文的版本重复文档
+
+    Args:
+        limit: 每次处理的文档数量限制
+    """
+    try:
+        db = get_db_session()
+        logger.info(f"开始清理总行发文版本重复，限制处理: {limit} 个文档")
+
+        stats = version_manager.process_headquarters_version_deduplication(db, limit)
+
+        db.close()
+
+        logger.info(f"总行发文版本去重完成 - 统计: {stats}")
+        return stats
+
+    except Exception as e:
+        logger.error(f"清理总行发文版本重复失败: {e}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+@app.task(name='clean_expired_documents')
+def clean_expired_documents(limit: int = 50):
+    """
+    清理过期文档（除总行发文外）
+
+    Args:
+        limit: 每次处理的文档数量限制
+    """
+    try:
+        db = get_db_session()
+        logger.info(f"开始清理过期文档，限制处理: {limit} 个文档")
+
+        stats = version_manager.process_document_expiration_check(db, limit)
+
+        db.close()
+
+        logger.info(f"过期文档清理完成 - 统计: {stats}")
+        return stats
+
+    except Exception as e:
+        logger.error(f"清理过期文档失败: {e}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 # 定期任务：每小时检查待处理文档
 from celery.schedules import crontab
@@ -582,6 +635,16 @@ app.conf.beat_schedule = {
         'task': 'batch_process_documents',
         'schedule': crontab(minute='*/5'),  # 每5分钟执行一次
         'args': (20,)  # 每次处理20个文档
+    },
+    'clean-headquarters-version-duplicates': {
+        'task': 'clean_headquarters_version_duplicates',
+        'schedule': crontab(hour='2', minute='0'),  # 每天凌晨2点执行
+        'args': (50,)  # 每次处理50个文档
+    },
+    'clean-expired-documents': {
+        'task': 'clean_expired_documents',
+        'schedule': crontab(hour='3', minute='0', day_of_week='0'),  # 每周日凌晨3点执行（每7天一次）
+        'args': (50,)  # 每次处理50个文档
     },
 }
 

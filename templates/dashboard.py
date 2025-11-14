@@ -165,8 +165,8 @@ def show_dashboard():
         
         # 快速操作
         st.subheader("⚡ 快速操作")
-        col1, col2, col3 = st.columns(3)
-        
+        col1, col2, col3, col4 = st.columns(4)
+
         with col1:
             if st.button("🚀 批量处理文档", key="batch_process"):
                 try:
@@ -178,13 +178,32 @@ def show_dashboard():
                         st.error(f"提交失败: {result.get('error', '未知错误')}")
                 except Exception as e:
                     st.error(f"操作失败: {str(e)}")
-        
+
         with col2:
-            if st.button("📋 查看待审核", key="view_pending"):
-                st.session_state.page_selector = "👥 人工审核"
-                st.rerun()
-        
+            if st.button("🔄 清理版本重复", key="clean_versions"):
+                try:
+                    result = trigger_clean_version_duplicates()
+                    if result.get('success'):
+                        st.success(f"✅ {result.get('message')}")
+                        st.info(f"📝 任务ID: {result.get('task_id')}")
+                    else:
+                        st.error(f"提交失败: {result.get('error', '未知错误')}")
+                except Exception as e:
+                    st.error(f"操作失败: {str(e)}")
+
         with col3:
+            if st.button("🗑️ 清理过期文档", key="clean_expired"):
+                try:
+                    result = trigger_clean_expired_documents()
+                    if result.get('success'):
+                        st.success(f"✅ {result.get('message')}")
+                        st.info(f"📝 任务ID: {result.get('task_id')}")
+                    else:
+                        st.error(f"提交失败: {result.get('error', '未知错误')}")
+                except Exception as e:
+                    st.error(f"操作失败: {str(e)}")
+
+        with col4:
             if st.button("⚙️ 系统设置", key="view_settings"):
                 st.session_state.page_selector = "⚙️ 系统设置"
                 st.rerun()
@@ -257,6 +276,34 @@ def trigger_batch_process():
     """触发批量处理"""
     try:
         url = get_files_api_url("batch-process?limit=20")
+        response = requests.post(url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {'success': False, 'error': f'API调用失败: {str(e)}'}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+def trigger_clean_version_duplicates(limit=50):
+    """触发版本去重清理"""
+    try:
+        # 使用maintenance API
+        base_url = get_files_api_url("").rstrip('/files/')
+        url = f"{base_url}/maintenance/clean-version-duplicates?limit={limit}"
+        response = requests.post(url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {'success': False, 'error': f'API调用失败: {str(e)}'}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+def trigger_clean_expired_documents(limit=50):
+    """触发过期文档清理"""
+    try:
+        # 使用maintenance API
+        base_url = get_files_api_url("").rstrip('/files/')
+        url = f"{base_url}/maintenance/clean-expired-documents?limit={limit}"
         response = requests.post(url, timeout=10)
         response.raise_for_status()
         return response.json()
