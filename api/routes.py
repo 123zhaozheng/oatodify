@@ -15,7 +15,8 @@ from tasks.document_processor import (
     batch_process_documents,
     approve_document,
     clean_headquarters_version_duplicates,
-    clean_expired_documents
+    clean_expired_documents,
+    import_dat_file_task
 )
 from services.system_monitor import (
     get_system_snapshot,
@@ -714,3 +715,78 @@ async def get_maintenance_task_status(task_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询任务状态失败: {str(e)}")
+
+class DATImportRequest(BaseModel):
+    """DAT文件导入请求"""
+    dat_file_path: Optional[str] = None
+    update_existing: Optional[bool] = None
+
+@router.post("/data/import-dat", summary="手动导入DAT文件")
+async def manual_import_dat_file(request: DATImportRequest = None):
+    """
+    手动触发DAT文件导入任务
+
+    - dat_file_path: DAT文件路径（可选，不指定则自动选择最新文件）
+    - update_existing: 是否更新已存在的记录（可选，不指定则使用配置文件设置）
+    """
+    try:
+        # 如果没有提供请求体，创建空的请求对象
+        if request is None:
+            request = DATImportRequest()
+
+        # 提交异步任务
+        task = import_dat_file_task.delay(
+            dat_file_path=request.dat_file_path,
+            update_existing=request.update_existing
+        )
+
+        return {
+            "success": True,
+            "message": "DAT文件导入任务已提交",
+            "task_id": task.id,
+            "description": "任务将自动导入最新的DAT文件数据，请通过task_id查询任务状态"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"提交DAT导入任务失败: {str(e)}")
+
+@router.get("/data/import-status", summary="查询最近的导入记录")
+async def get_import_status(db: Session = Depends(get_db)):
+    """
+    查询最近的数据导入记录统计
+    """
+    try:
+        # 统计最近导入的数据
+        recent_imports = db.query(
+            func.date(OAFileInfo.last_sync_at).label('sync_date'),
+            OAFileInfo.sync_source,
+            func.count(OAFileInfo.id).label('count')
+        ).filter(
+            OAFileInfo.sync_source == 'dat_import'
+        ).group_by(
+            func.date(OAFileInfo.last_sync_at),
+            OAFileInfo.sync_source
+        ).order_by(
+            func.date(OAFileInfo.last_sync_at).desc()
+        ).limit(10).all()
+
+        import_history = []
+        for sync_date, sync_source, count in recent_imports:
+            import_history.append({
+                "date": sync_date.isoformat() if sync_date else None,
+                "source": sync_source,
+                "count": count
+            })
+
+        # 统计总的导入记录数
+        total_imported = db.query(OAFileInfo).filter(
+            OAFileInfo.sync_source == 'dat_import'
+        ).count()
+
+        return {
+            "total_imported": total_imported,
+            "recent_imports": import_history
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询导入状态失败: {str(e)}")

@@ -12,6 +12,7 @@ from services.ai_analyzer import ai_analyzer
 from services.dify_service import dify_service, multi_kb_manager
 from services.file_filter import file_filter
 from services.version_manager import version_manager
+from services.dat_importer import import_dat_file, get_latest_dat_file
 from config import settings
 import json
 
@@ -33,6 +34,7 @@ app.conf.update(
         'tasks.document_processor.process_document': {'queue': 'document_processing'},
         'tasks.document_processor.batch_process_documents': {'queue': 'batch_processing'},
         'tasks.document_processor.approve_document': {'queue': 'document_processing'},
+        'tasks.document_processor.import_dat_file_task': {'queue': 'data_import'},
     },
     task_default_queue='document_processing'
 )
@@ -627,6 +629,58 @@ def clean_expired_documents(limit: int = 50):
             'error': str(e)
         }
 
+@app.task(name='import_dat_file_task')
+def import_dat_file_task(dat_file_path: str = None, update_existing: bool = None):
+    """
+    导入DAT文件数据到数据库
+
+    Args:
+        dat_file_path: DAT文件路径，如果为None则自动获取最新文件
+        update_existing: 是否更新已存在的记录，如果为None则使用配置文件设置
+    """
+    try:
+        db = get_db_session()
+
+        # 如果未指定文件路径，则获取最新的DAT文件
+        if dat_file_path is None:
+            try:
+                dat_file_path = get_latest_dat_file(settings.dat_import_directory)
+                logger.info(f"自动选择最新DAT文件: {dat_file_path}")
+            except FileNotFoundError as e:
+                logger.error(f"未找到DAT文件: {e}")
+                return {
+                    'success': False,
+                    'error': str(e)
+                }
+
+        # 如果未指定是否更新已存在记录，则使用配置文件设置
+        if update_existing is None:
+            update_existing = settings.dat_import_update_existing
+
+        logger.info(f"开始导入DAT文件: {dat_file_path}, 更新已存在记录: {update_existing}")
+
+        # 执行导入
+        stats = import_dat_file(dat_file_path, db, update_existing)
+
+        db.close()
+
+        logger.info(f"DAT文件导入完成 - 统计: {stats}")
+        return {
+            'success': True,
+            'stats': stats,
+            'file_path': dat_file_path,
+            'update_existing': update_existing
+        }
+
+    except Exception as e:
+        logger.error(f"导入DAT文件失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
 # 定期任务：每小时检查待处理文档
 from celery.schedules import crontab
 
@@ -645,6 +699,11 @@ app.conf.beat_schedule = {
         'task': 'clean_expired_documents',
         'schedule': crontab(hour='3', minute='0', day_of_week='0'),  # 每周日凌晨3点执行（每7天一次）
         'args': (50,)  # 每次处理50个文档
+    },
+    'import-dat-file': {
+        'task': 'import_dat_file_task',
+        'schedule': crontab(hour='2', minute='10'),  # 每天凌晨2:10执行
+        'args': ()  # 自动选择最新的DAT文件
     },
 }
 

@@ -68,7 +68,11 @@ class Settings(BaseSettings):
     filter_case_sensitive_keywords: bool = Field(default_factory=lambda: os.getenv("FILTER_CASE_SENSITIVE_KEYWORDS", "false").lower() == "true")
     filter_max_file_size_mb: int = Field(default_factory=lambda: int(os.getenv("FILTER_MAX_FILE_SIZE_MB", "100")))
     filter_min_file_size_bytes: int = Field(default_factory=lambda: int(os.getenv("FILTER_MIN_FILE_SIZE_BYTES", "100")))
-    
+
+    # DAT文件导入配置
+    dat_import_directory: str = Field(default_factory=lambda: os.getenv("DAT_IMPORT_DIRECTORY", "/data/dat_files"))
+    dat_import_update_existing: bool = Field(default_factory=lambda: os.getenv("DAT_IMPORT_UPDATE_EXISTING", "false").lower() == "true")
+
     class Config:
         env_file = ".env"
         case_sensitive = False

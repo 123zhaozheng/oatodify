@@ -22,7 +22,7 @@ def show_maintenance():
     """)
 
     # 创建两个标签页
-    tab1, tab2, tab3 = st.tabs(["📋 版本去重", "🗑️ 过期清理", "📊 任务监控"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 版本去重", "🗑️ 过期清理", "📥 数据导入", "📊 任务监控"])
 
     with tab1:
         show_version_cleanup_tab()
@@ -31,6 +31,9 @@ def show_maintenance():
         show_expired_cleanup_tab()
 
     with tab3:
+        show_data_import_tab()
+
+    with tab4:
         show_task_monitor_tab()
 
 
@@ -203,6 +206,129 @@ def show_expired_cleanup_tab():
                 st.error(f"❌ 任务提交失败: {result.get('error', '未知错误')}")
 
 
+def show_data_import_tab():
+    """显示数据导入标签页"""
+    st.header("📥 DAT文件数据导入")
+
+    st.markdown("""
+    ### 功能说明
+    从数据组提供的.dat文件中导入文件信息：
+
+    1. 📄 读取DAT文件（使用ASCII码1作为字段分隔符）
+    2. 🔍 检测已存在的记录
+    3. ➕ 增量导入新记录
+    4. ♻️ 可选择更新已存在的记录
+
+    ### 当前设置
+    """)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.info("**定时任务**: 每天凌晨2:10自动执行")
+        st.info("**导入目录**: `/data/dat_files`")
+
+    with col2:
+        st.success("**字段分隔符**: ASCII码1（`\\x01`）")
+        st.success("**导入模式**: 增量导入（默认跳过已存在）")
+
+    st.divider()
+
+    # 查询导入状态
+    st.subheader("📊 导入历史")
+
+    with st.spinner("正在加载导入统计..."):
+        import_status = get_import_status()
+
+        if import_status:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.metric("总导入记录数", import_status.get('total_imported', 0))
+
+            with col2:
+                recent = import_status.get('recent_imports', [])
+                if recent:
+                    last_import = recent[0]
+                    st.metric("最近导入日期", last_import.get('date', 'N/A'))
+                else:
+                    st.metric("最近导入日期", "暂无记录")
+
+            # 显示最近的导入记录
+            if recent:
+                st.markdown("#### 最近10次导入")
+                import pandas as pd
+
+                df = pd.DataFrame(recent)
+                df.columns = ['日期', '来源', '数量']
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # 手动触发区域
+    st.subheader("⚡ 手动触发导入")
+
+    col1, col2 = st.columns([3, 1])
+
+    with col1:
+        dat_file_path = st.text_input(
+            "DAT文件路径（可选）",
+            placeholder="留空则自动选择最新文件",
+            help="输入完整的DAT文件路径，或留空让系统自动选择最新的文件"
+        )
+
+    with col2:
+        st.write("")  # 占位
+        st.write("")  # 占位
+        update_existing = st.checkbox(
+            "更新已存在记录",
+            value=False,
+            help="勾选则更新已存在的记录，不勾选则跳过已存在的记录"
+        )
+
+    col1, col2, col3 = st.columns([1, 1, 2])
+
+    with col1:
+        if st.button("🚀 开始导入", key="start_import", type="primary", use_container_width=True):
+            with st.spinner("正在提交导入任务..."):
+                # 准备请求参数
+                import_params = {}
+                if dat_file_path.strip():
+                    import_params['dat_file_path'] = dat_file_path.strip()
+                import_params['update_existing'] = update_existing
+
+                result = trigger_import_dat_file(import_params)
+
+                if result.get('success'):
+                    st.success(f"✅ {result.get('message')}")
+
+                    # 显示任务信息
+                    task_id = result.get('task_id')
+                    st.info(f"📝 **任务ID**: `{task_id}`")
+                    st.info(f"📄 **更新模式**: {'是' if update_existing else '否'}")
+
+                    # 保存到session state用于监控
+                    if 'running_tasks' not in st.session_state:
+                        st.session_state.running_tasks = []
+
+                    st.session_state.running_tasks.append({
+                        'task_id': task_id,
+                        'type': 'dat_import',
+                        'dat_file_path': dat_file_path or '自动选择',
+                        'update_existing': update_existing,
+                        'started_at': datetime.now().isoformat(),
+                        'status': 'running'
+                    })
+
+                    st.success("💡 可以在【任务监控】标签页查看执行进度")
+                else:
+                    st.error(f"❌ 任务提交失败: {result.get('error', '未知错误')}")
+
+    with col2:
+        if st.button("🔄 刷新统计", key="refresh_import_stats", use_container_width=True):
+            st.rerun()
+
+
 def show_task_monitor_tab():
     """显示任务监控标签页"""
     st.header("📊 任务监控")
@@ -241,16 +367,30 @@ def show_task_monitor_tab():
         # 任务类型显示
         if task_type == 'version_cleanup':
             task_type_name = "🔄 版本去重"
-        else:
+        elif task_type == 'expired_cleanup':
             task_type_name = "🗑️ 过期清理"
+        elif task_type == 'dat_import':
+            task_type_name = "📥 数据导入"
+        else:
+            task_type_name = "❓ 未知任务"
 
         with st.expander(f"{task_type_name} - {task_id[:12]}...", expanded=(idx == len(st.session_state.running_tasks) - 1)):
-            st.markdown(f"""
-            **任务ID**: `{task_id}`
-            **任务类型**: {task_type_name}
-            **处理数量**: {task_info.get('limit', 'N/A')} 个文档
-            **开始时间**: {started_at}
-            """)
+            # 根据任务类型显示不同的信息
+            if task_type == 'dat_import':
+                st.markdown(f"""
+                **任务ID**: `{task_id}`
+                **任务类型**: {task_type_name}
+                **DAT文件路径**: {task_info.get('dat_file_path', '自动选择')}
+                **更新已存在记录**: {'是' if task_info.get('update_existing', False) else '否'}
+                **开始时间**: {started_at}
+                """)
+            else:
+                st.markdown(f"""
+                **任务ID**: `{task_id}`
+                **任务类型**: {task_type_name}
+                **处理数量**: {task_info.get('limit', 'N/A')} 个文档
+                **开始时间**: {started_at}
+                """)
 
             # 查询任务状态
             status_result = check_task_status(task_id)
@@ -287,48 +427,86 @@ def show_task_monitor_tab():
 
                     st.success("### 📈 执行结果")
 
-                    col1, col2, col3, col4 = st.columns(4)
+                    # DAT导入任务的结果展示
+                    if task_type == 'dat_import':
+                        stats = result.get('stats', {})
 
-                    with col1:
-                        st.metric("处理文档", result.get('processed', 0))
+                        col1, col2, col3, col4 = st.columns(4)
 
-                    with col2:
-                        if task_type == 'version_cleanup':
-                            st.metric("发现重复", result.get('duplicates_found', 0))
-                        else:
-                            st.metric("元数据过期", result.get('expired_by_metadata', 0))
+                        with col1:
+                            st.metric("总行数", stats.get('total_lines', 0))
 
-                    with col3:
-                        if task_type == 'version_cleanup':
-                            st.metric("删除文档", result.get('deleted', 0))
-                        else:
-                            st.metric("AI判定过期", result.get('expired_by_ai', 0))
+                        with col2:
+                            st.metric("新增记录", stats.get('new_records', 0))
 
-                    with col4:
-                        st.metric("错误数", result.get('errors', 0))
+                        with col3:
+                            st.metric("更新记录", stats.get('updated_records', 0))
 
-                    # 显示详细信息
-                    details = result.get('details', [])
-                    if details:
-                        st.markdown("### 📋 详细信息")
-                        for detail in details[:5]:  # 只显示前5条
+                        with col4:
+                            st.metric("错误数", stats.get('error_records', 0))
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.metric("解析成功", stats.get('parsed_lines', 0))
+
+                        with col2:
+                            st.metric("跳过记录", stats.get('skipped_records', 0))
+
+                        # 显示错误信息
+                        errors = stats.get('errors', [])
+                        if errors:
+                            st.markdown("### ⚠️ 错误信息")
+                            for error in errors[:5]:  # 只显示前5条
+                                st.warning(error)
+
+                            if len(errors) > 5:
+                                st.caption(f"... 还有 {len(errors) - 5} 条错误未显示")
+
+                    # 其他任务的结果展示
+                    else:
+                        col1, col2, col3, col4 = st.columns(4)
+
+                        with col1:
+                            st.metric("处理文档", result.get('processed', 0))
+
+                        with col2:
                             if task_type == 'version_cleanup':
-                                st.info(f"""
-                                **标题**: {detail.get('title')}
-                                **最新版本**: {detail.get('latest_document')}
-                                **删除数量**: {detail.get('deleted_count')}
-                                **判断理由**: {detail.get('reasoning')}
-                                """)
+                                st.metric("发现重复", result.get('duplicates_found', 0))
                             else:
-                                st.info(f"""
-                                **文件名**: {detail.get('filename')}
-                                **检查方式**: {detail.get('check_method')}
-                                **过期日期**: {detail.get('expiration_date', 'N/A')}
-                                **判断理由**: {detail.get('reasoning', 'N/A')}
-                                """)
+                                st.metric("元数据过期", result.get('expired_by_metadata', 0))
 
-                        if len(details) > 5:
-                            st.caption(f"... 还有 {len(details) - 5} 条记录未显示")
+                        with col3:
+                            if task_type == 'version_cleanup':
+                                st.metric("删除文档", result.get('deleted', 0))
+                            else:
+                                st.metric("AI判定过期", result.get('expired_by_ai', 0))
+
+                        with col4:
+                            st.metric("错误数", result.get('errors', 0))
+
+                        # 显示详细信息
+                        details = result.get('details', [])
+                        if details:
+                            st.markdown("### 📋 详细信息")
+                            for detail in details[:5]:  # 只显示前5条
+                                if task_type == 'version_cleanup':
+                                    st.info(f"""
+                                    **标题**: {detail.get('title')}
+                                    **最新版本**: {detail.get('latest_document')}
+                                    **删除数量**: {detail.get('deleted_count')}
+                                    **判断理由**: {detail.get('reasoning')}
+                                    """)
+                                else:
+                                    st.info(f"""
+                                    **文件名**: {detail.get('filename')}
+                                    **检查方式**: {detail.get('check_method')}
+                                    **过期日期**: {detail.get('expiration_date', 'N/A')}
+                                    **判断理由**: {detail.get('reasoning', 'N/A')}
+                                    """)
+
+                            if len(details) > 5:
+                                st.caption(f"... 还有 {len(details) - 5} 条记录未显示")
 
                 elif ready and not successful:
                     error = status_result.get('error', '未知错误')
@@ -383,4 +561,34 @@ def check_task_status(task_id):
         return None
     except Exception as e:
         st.error(f"查询失败: {str(e)}")
+        return None
+
+
+def trigger_import_dat_file(params):
+    """触发DAT文件导入"""
+    try:
+        base_url = get_files_api_url("").rstrip('/files/')
+        url = f"{base_url}/data/import-dat"
+        response = requests.post(url, json=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {'success': False, 'error': f'API调用失败: {str(e)}'}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def get_import_status():
+    """获取导入状态统计"""
+    try:
+        base_url = get_files_api_url("").rstrip('/files/')
+        url = f"{base_url}/data/import-status"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"获取导入状态失败: {str(e)}")
+        return None
+    except Exception as e:
+        st.error(f"获取失败: {str(e)}")
         return None
