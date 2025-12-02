@@ -293,13 +293,13 @@ class VersionManager:
             logger.error(f"删除文档时发生异常: {e}")
             return False
 
-    def process_headquarters_version_deduplication(self, db: Session, limit: int = 50) -> Dict:
+    def process_headquarters_version_deduplication(self, db: Session, limit: int = 2000) -> Dict:
         """
         处理总行发文的版本去重
 
         Args:
             db: 数据库会话
-            limit: 每次处理的文档数量限制
+            limit: 每次处理的文档数量限制（默认2000，应大于知识库中总行发文的总数）
 
         Returns:
             处理结果统计
@@ -313,14 +313,14 @@ class VersionManager:
         }
 
         try:
-            # 查询所有已完成的总行发文
+            # 查询所有已完成的总行发文，按创建时间倒序排序（最新的优先）
             headquarters_docs = db.query(OAFileInfo).filter(
                 OAFileInfo.business_category == BusinessCategory.HEADQUARTERS_ISSUE,
                 OAFileInfo.processing_status == ProcessingStatus.COMPLETED,
                 OAFileInfo.document_id.isnot(None)
-            ).limit(limit).all()
+            ).order_by(OAFileInfo.processing_completed_at.desc()).limit(limit).all()
 
-            logger.info(f"找到 {len(headquarters_docs)} 个总行发文待处理")
+            logger.info(f"找到 {len(headquarters_docs)} 个总行发文待处理（limit={limit}）")
 
             for file_info in headquarters_docs:
                 stats['processed'] += 1
@@ -542,13 +542,13 @@ class VersionManager:
             logger.error(f"AI有效期检查失败: {e}")
             return False, f"检查失败: {str(e)}"
 
-    def process_document_expiration_check(self, db: Session, limit: int = 50) -> Dict:
+    def process_document_expiration_check(self, db: Session, limit: int = 2000) -> Dict:
         """
         处理文档有效期检查（排除总行发文）
 
         Args:
             db: 数据库会话
-            limit: 每次处理的文档数量限制
+            limit: 每次处理的文档数量限制（默认2000，应大于知识库中非总行发文的总数）
 
         Returns:
             处理结果统计
@@ -563,14 +563,14 @@ class VersionManager:
         }
 
         try:
-            # 查询所有已完成的非总行发文
+            # 查询所有已完成的非总行发文，按创建时间倒序排序（最新的优先）
             documents = db.query(OAFileInfo).filter(
                 OAFileInfo.business_category != BusinessCategory.HEADQUARTERS_ISSUE,
                 OAFileInfo.processing_status == ProcessingStatus.COMPLETED,
                 OAFileInfo.document_id.isnot(None)
-            ).limit(limit).all()
+            ).order_by(OAFileInfo.processing_completed_at.desc()).limit(limit).all()
 
-            logger.info(f"找到 {len(documents)} 个非总行发文待检查有效期")
+            logger.info(f"找到 {len(documents)} 个非总行发文待检查有效期（limit={limit}）")
 
             for file_info in documents:
                 stats['processed'] += 1

@@ -3,9 +3,11 @@ DAT文件数据导入服务
 用于从数据组提供的.dat文件中增量导入文件信息到oa_file_info表
 """
 
+import glob
 import logging
+import os
 from typing import Dict, List, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from models import OAFileInfo, BusinessCategory, ProcessingStatus
@@ -59,32 +61,33 @@ class DATImporter:
             fields = line.split(DAT_DELIMITER)
 
             # 根据DAT文件的字段顺序解析（需要根据实际情况调整）
-            # 假设字段顺序为：imagefileid, business_category, is_zw, fj_imagefileid,
-            #                imagefilename, imagefiletype, is_zip, filesize, asecode, tokenkey
+            # 第一列不需要，所以所有索引+1
+            # 字段顺序为：[跳过], imagefileid, business_category, is_zw, fj_imagefileid,
+            #            imagefilename, imagefiletype, is_zip, filesize, asecode, tokenkey
 
-            if len(fields) < 10:
-                logger.warning(f"字段数量不足: {len(fields)} < 10")
+            if len(fields) < 11:
+                logger.warning(f"字段数量不足: {len(fields)} < 11")
                 return None
 
-            # 解析业务分类
+            # 解析业务分类（索引从1变为2）
             try:
-                business_category = BusinessCategory(fields[1].strip()) if fields[1].strip() else None
+                business_category = BusinessCategory(fields[2].strip()) if fields[2].strip() else None
             except ValueError:
-                logger.warning(f"无效的业务分类: {fields[1]}")
+                logger.warning(f"无效的业务分类: {fields[2]}")
                 business_category = None
 
-            # 解析布尔值
-            is_zw = fields[2].strip().lower() in ('1', 'true', 'yes', 't', 'y')
-            is_zip = fields[6].strip().lower() in ('1', 'true', 'yes', 't', 'y')
+            # 解析布尔值（索引+1）
+            is_zw = fields[3].strip().lower() in ('1', 'true', 'yes', 't', 'y')
+            is_zip = fields[7].strip().lower() in ('1', 'true', 'yes', 't', 'y')
 
-            # 解析文件大小
+            # 解析文件大小（索引从7变为8）
             try:
-                filesize = int(fields[7].strip()) if fields[7].strip() else None
+                filesize = int(fields[8].strip()) if fields[8].strip() else None
             except ValueError:
                 filesize = None
 
-            # 处理附件ID列表
-            fj_imagefileid = fields[3].strip() if fields[3].strip() else None
+            # 处理附件ID列表（索引从3变为4）
+            fj_imagefileid = fields[4].strip() if fields[4].strip() else None
             # 如果附件ID不是JSON格式，尝试转换为JSON数组格式
             if fj_imagefileid and not fj_imagefileid.startswith('['):
                 # 假设多个ID用逗号分隔
@@ -92,16 +95,16 @@ class DATImporter:
                 fj_imagefileid = json.dumps(fj_ids, ensure_ascii=False) if fj_ids else None
 
             return {
-                'imagefileid': fields[0].strip(),
+                'imagefileid': fields[1].strip(),
                 'business_category': business_category,
                 'is_zw': is_zw,
                 'fj_imagefileid': fj_imagefileid,
-                'imagefilename': fields[4].strip(),
-                'imagefiletype': fields[5].strip() if fields[5].strip() else None,
+                'imagefilename': fields[5].strip(),
+                'imagefiletype': fields[6].strip() if fields[6].strip() else None,
                 'is_zip': is_zip,
                 'filesize': filesize,
-                'asecode': fields[8].strip() if fields[8].strip() else None,
-                'tokenkey': fields[9].strip() if fields[9].strip() else None,
+                'asecode': fields[9].strip() if fields[9].strip() else None,
+                'tokenkey': fields[10].strip() if fields[10].strip() else None,
             }
 
         except Exception as e:
@@ -220,27 +223,58 @@ def import_dat_file(dat_file_path: str, db: Session, update_existing: bool = Fal
     return importer.import_to_database(db, update_existing)
 
 
+def _find_previous_day_directory(dat_directory: str) -> Tuple[str, str]:
+    """找到上一天日期对应的子目录并返回目录路径及日期字符串"""
+    if not os.path.isdir(dat_directory):
+        raise FileNotFoundError(f"DAT文件根目录不存在: {dat_directory}")
+
+    target_date = (datetime.now() - timedelta(days=1)).date()
+    normalized_target = target_date.strftime("%Y%m%d")
+
+    matching_directories: List[str] = []
+    with os.scandir(dat_directory) as entries:
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+
+            digits_only = ''.join(ch for ch in entry.name if ch.isdigit())
+            if digits_only == normalized_target:
+                matching_directories.append(entry.path)
+
+    if not matching_directories:
+        raise FileNotFoundError(
+            f"在目录 {dat_directory} 中未找到日期 {target_date.isoformat()} 对应的子目录"
+        )
+
+    selected_directory = max(matching_directories, key=os.path.getmtime)
+    return selected_directory, target_date.isoformat()
+
+
 def get_latest_dat_file(dat_directory: str) -> str:
     """
-    获取目录中最新的DAT文件
+    获取上一天目录中最新的DAT文件
 
     Args:
-        dat_directory: DAT文件目录
+        dat_directory: DAT文件根目录（包含按日期命名的子目录）
 
     Returns:
-        最新DAT文件的完整路径
+        上一天日期目录中的最新DAT文件完整路径
     """
-    import os
-    import glob
 
-    # 查找所有.dat文件
-    dat_files = glob.glob(os.path.join(dat_directory, "*.dat"))
+    target_directory, target_date_str = _find_previous_day_directory(dat_directory)
+
+    dat_files = [
+        *glob.glob(os.path.join(target_directory, "*.dat")),
+        *glob.glob(os.path.join(target_directory, "*.DAT")),
+    ]
+    dat_files = [file_path for file_path in dat_files if os.path.isfile(file_path)]
 
     if not dat_files:
-        raise FileNotFoundError(f"在目录 {dat_directory} 中未找到.dat文件")
+        raise FileNotFoundError(
+            f"在日期目录 {target_directory} 中未找到.dat文件 (目标日期: {target_date_str})"
+        )
 
-    # 按修改时间排序，返回最新的文件
     latest_file = max(dat_files, key=os.path.getmtime)
 
-    logger.info(f"找到最新的DAT文件: {latest_file}")
+    logger.info(f"找到日期 {target_date_str} 的DAT文件: {latest_file}")
     return latest_file

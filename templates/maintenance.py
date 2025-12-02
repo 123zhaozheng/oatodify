@@ -158,7 +158,7 @@ def show_expired_cleanup_tab():
         limit = st.slider(
             "处理文档数量",
             min_value=10,
-            max_value=200,
+            max_value=5000,
             value=50,
             step=10,
             help="一次性处理的文档数量",

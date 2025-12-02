@@ -693,12 +693,12 @@ app.conf.beat_schedule = {
     'clean-headquarters-version-duplicates': {
         'task': 'clean_headquarters_version_duplicates',
         'schedule': crontab(hour='2', minute='0'),  # 每天凌晨2点执行
-        'args': (50,)  # 每次处理50个文档
+        'args': (2000,)  # 每次处理2000个文档（确保覆盖所有总行发文，预留增长空间）
     },
     'clean-expired-documents': {
         'task': 'clean_expired_documents',
         'schedule': crontab(hour='3', minute='0', day_of_week='0'),  # 每周日凌晨3点执行（每7天一次）
-        'args': (50,)  # 每次处理50个文档
+        'args': (2000,)  # 每次处理2000个文档（确保覆盖所有非总行发文，预留增长空间）
     },
     'import-dat-file': {
         'task': 'import_dat_file_task',
