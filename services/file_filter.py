@@ -272,20 +272,34 @@ class FileFilter:
             }
 
     def _check_duplicate(self, file_info: OAFileInfo) -> Dict:
-        """检查重复文件"""
+        """检查重复文件（使用文件名前缀匹配）"""
         try:
+            import os
+            from services.dify_service import dify_service, multi_kb_manager
+            from services.ai_analyzer import ai_analyzer
+            
             db = get_db_session()
 
-            # 查找同名文件，排除当前文件
-            duplicate_query = db.query(OAFileInfo).filter(
+            # 获取文件名前缀（去掉扩展名）
+            filename_prefix = os.path.splitext(file_info.imagefilename)[0] if file_info.imagefilename else ''
+            
+            if not filename_prefix:
+                db.close()
+                return {
+                    'is_duplicate': False,
+                    'reason': '无法提取文件名前缀',
+                    'duplicate_files': []
+                }
+            
+            # 使用前缀匹配查询所有同前缀文件（包括同名和不同扩展名的）
+            prefix_pattern = f"{filename_prefix}.%"
+            duplicates = db.query(OAFileInfo).filter(
                 and_(
-                    OAFileInfo.imagefilename == file_info.imagefilename,
+                    OAFileInfo.imagefilename.like(prefix_pattern),
                     OAFileInfo.imagefileid != file_info.imagefileid
                 )
-            )
-
-            duplicates = duplicate_query.all()
-
+            ).all()
+            
             if not duplicates:
                 db.close()
                 return {
@@ -294,7 +308,9 @@ class FileFilter:
                     'duplicate_files': []
                 }
 
-            # 检查是否存在已完成或正在处理的同名同大小文件
+            deleted_old_docs = []  # 记录被删除的旧文档
+            
+            # 检查是否存在已完成或正在处理的同前缀文件
             for duplicate in duplicates:
                 # 检查处理状态 - 包含所有正在处理和已完成的状态
                 if duplicate.processing_status in [
@@ -306,15 +322,57 @@ class FileFilter:
                     ProcessingStatus.COMPLETED,
                     ProcessingStatus.SKIPPED
                 ]:
-                    # 检查文件大小是否相同
-                    if duplicate.filesize and file_info.filesize and duplicate.filesize == file_info.filesize:
+                    # 如果已经处理完成且有 document_id，删除旧文档
+                    if duplicate.processing_status == ProcessingStatus.COMPLETED and duplicate.document_id:
+                        logger.info(f"发现同前缀已处理文件: {duplicate.imagefilename} (前缀: {filename_prefix})，将删除旧文档")
+                        
+                        try:
+                            # 获取对应的 Dify 服务
+                            target_kb = ai_analyzer.get_target_knowledge_base(duplicate.business_category, db)
+                            if target_kb:
+                                dify_service_instance = multi_kb_manager.get_service_for_knowledge_base(target_kb)
+                            else:
+                                dify_service_instance = dify_service
+                            
+                            # 调用删除接口
+                            delete_result = dify_service_instance.delete_document_from_knowledge_base(duplicate.document_id)
+                            
+                            if delete_result['success']:
+                                # 更新旧文档状态为跳过
+                                duplicate.processing_status = ProcessingStatus.SKIPPED
+                                duplicate.processing_message = f"同前缀新文档 {file_info.imagefilename} 已存在，旧版本已删除"
+                                old_document_id = duplicate.document_id
+                                duplicate.document_id = None
+                                db.commit()
+                                
+                                deleted_old_docs.append({
+                                    'id': duplicate.imagefileid,
+                                    'filename': duplicate.imagefilename,
+                                    'old_document_id': old_document_id
+                                })
+                                
+                                logger.info(f"成功删除旧文档并更新状态: {duplicate.imagefilename} -> SKIPPED")
+                            else:
+                                logger.warning(f"删除旧文档失败: {duplicate.imagefilename} - {delete_result.get('error')}")
+                        
+                        except Exception as del_error:
+                            logger.error(f"删除旧文档时发生异常: {del_error}")
+                    
+                    # 如果同前缀文件正在处理中（非 COMPLETED），标记为重复，跳过当前文件
+                    elif duplicate.processing_status in [
+                        ProcessingStatus.DOWNLOADING,
+                        ProcessingStatus.DECRYPTING,
+                        ProcessingStatus.PARSING,
+                        ProcessingStatus.ANALYZING,
+                        ProcessingStatus.AWAITING_APPROVAL
+                    ]:
                         db.close()
-                        logger.info(f"发现重复文件: {file_info.imagefilename} "
-                                   f"(大小: {format_file_size(file_info.filesize)}) "
+                        logger.info(f"发现同前缀文件正在处理中: {duplicate.imagefilename} "
+                                   f"(前缀: {filename_prefix}) "
                                    f"状态: {duplicate.processing_status.value}")
                         return {
                             'is_duplicate': True,
-                            'reason': f'同名同大小文件已存在 (状态: {duplicate.processing_status.value})',
+                            'reason': f'同前缀文件正在处理中 (状态: {duplicate.processing_status.value})',
                             'duplicate_files': [{
                                 'id': duplicate.imagefileid,
                                 'filename': duplicate.imagefilename,
@@ -326,10 +384,19 @@ class FileFilter:
 
             db.close()
 
-            # 存在同名文件但大小不同或状态不同，不算重复
+            # 如果删除了旧文档，当前文件不算重复，可以继续处理
+            if deleted_old_docs:
+                return {
+                    'is_duplicate': False,
+                    'reason': f'已删除 {len(deleted_old_docs)} 个同前缀旧文档',
+                    'duplicate_files': [],
+                    'deleted_old_docs': deleted_old_docs
+                }
+
+            # 存在同前缀文件但状态不需要处理，不算重复
             return {
                 'is_duplicate': False,
-                'reason': '存在同名文件但大小或状态不同',
+                'reason': '存在同前缀文件但状态不冲突',
                 'duplicate_files': [{
                     'id': dup.imagefileid,
                     'filename': dup.imagefilename,

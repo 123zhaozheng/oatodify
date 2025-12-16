@@ -123,16 +123,22 @@ def show_version_cleanup_tab():
 
 def show_expired_cleanup_tab():
     """显示过期清理标签页"""
-    st.header("🗑️ 过期文档清理")
+    st.header("🗑️ 过期文档和重复文档清理")
 
     st.markdown("""
     ### 功能说明
-    自动检查和清理过期文档：
+    自动检查和清理过期文档及重复文档：
 
+    **过期文档清理：**
     1. 📅 检查ai_metadata中的expiration_date字段
     2. ⏰ 对比当前日期判断是否过期
     3. 🤖 如果没有元数据，使用AI判断有效期
     4. 🗑️ 删除已过期的文档
+
+    **重复文档清理（增强）：**
+    5. 🔍 查询指定天数内完成的文档
+    6. 📝 通过文件名前缀匹配查找重复文档
+    7. 🧹 保留最新版本，删除旧版本
 
     ### 当前设置
     """)
@@ -141,7 +147,7 @@ def show_expired_cleanup_tab():
 
     with col1:
         st.info("**定时任务**: 每周日凌晨3点自动执行（每7天一次）")
-        st.info("**默认处理**: 50个文档/次")
+        st.info("**默认处理**: 50个文档/次，重复检查5天")
 
     with col2:
         st.success("**永久有效标识**")
@@ -166,20 +172,27 @@ def show_expired_cleanup_tab():
         )
 
     with col2:
-        st.write("")  # 占位
-        st.write("")  # 占位
-        dry_run = st.checkbox("预览模式", value=False, help="不实际删除，仅显示会删除的文档", key="expired_dry_run")
+        days = st.slider(
+            "重复检查天数",
+            min_value=1,
+            max_value=30,
+            value=5,
+            step=1,
+            help="查询最近多少天内完成的文档进行重复检查",
+            key="duplicate_days"
+        )
 
     with col3:
         st.write("")  # 占位
         st.write("")  # 占位
+        dry_run = st.checkbox("预览模式", value=False, help="不实际删除，仅显示会删除的文档", key="expired_dry_run")
 
     if st.button("🚀 开始清理", key="start_expired_cleanup", type="primary", use_container_width=True):
         if dry_run:
             st.warning("⚠️ 预览模式暂未实现，将直接执行清理操作")
 
         with st.spinner("正在提交清理任务..."):
-            result = trigger_clean_expired_documents(limit)
+            result = trigger_clean_expired_documents(limit, days)
 
             if result.get('success'):
                 st.success(f"✅ {result.get('message')}")
@@ -197,6 +210,7 @@ def show_expired_cleanup_tab():
                     'task_id': task_id,
                     'type': 'expired_cleanup',
                     'limit': limit,
+                    'days': days,
                     'started_at': datetime.now().isoformat(),
                     'status': 'running'
                 })
@@ -534,11 +548,11 @@ def trigger_clean_version_duplicates(limit=50):
         return {'success': False, 'error': str(e)}
 
 
-def trigger_clean_expired_documents(limit=50):
-    """触发过期文档清理"""
+def trigger_clean_expired_documents(limit=50, days=5):
+    """触发过期文档和重复文档清理"""
     try:
         base_url = get_files_api_url("").rstrip('/files/')
-        url = f"{base_url}/maintenance/clean-expired-documents?limit={limit}"
+        url = f"{base_url}/maintenance/clean-expired-documents?limit={limit}&days={days}"
         response = requests.post(url, timeout=10)
         response.raise_for_status()
         return response.json()

@@ -604,23 +604,46 @@ def clean_headquarters_version_duplicates(limit: int = 50):
         }
 
 @app.task(name='clean_expired_documents')
-def clean_expired_documents(limit: int = 50):
+def clean_expired_documents(limit: int = 50, days: int = 5):
     """
-    清理过期文档（除总行发文外）
+    1.清理过期文档（除总行发文外）
+    2.清理重复文档（增强）- 通过文件名前缀匹配
+    
 
     Args:
         limit: 每次处理的文档数量限制
+        days: 重复文档清理的时间范围（天数），默认5天
     """
     try:
         db = get_db_session()
-        logger.info(f"开始清理过期文档，限制处理: {limit} 个文档")
+        logger.info(f"开始清理过期文档和重复文档，限制处理: {limit} 个文档，重复检查天数: {days} 天")
 
-        stats = version_manager.process_document_expiration_check(db, limit)
+        # 1. 清理过期文档
+        logger.info("===== 阶段1: 清理过期文档 =====")
+        expiration_stats = version_manager.process_document_expiration_check(db, limit)
+        logger.info(f"过期文档清理完成 - 统计: {expiration_stats}")
+
+        # 2. 清理重复文档（增强）
+        logger.info("===== 阶段2: 清理重复文档 =====")
+        duplicate_stats = version_manager.process_duplicate_document_cleanup(db, days=days, limit=limit)
+        logger.info(f"重复文档清理完成 - 统计: {duplicate_stats}")
 
         db.close()
 
-        logger.info(f"过期文档清理完成 - 统计: {stats}")
-        return stats
+        # 合并统计结果
+        combined_stats = {
+            'success': True,
+            'expiration_cleanup': expiration_stats,
+            'duplicate_cleanup': duplicate_stats,
+            'summary': {
+                'total_processed': expiration_stats.get('processed', 0) + duplicate_stats.get('processed', 0),
+                'total_deleted': expiration_stats.get('deleted', 0) + duplicate_stats.get('deleted', 0),
+                'total_errors': expiration_stats.get('errors', 0) + duplicate_stats.get('errors', 0)
+            }
+        }
+
+        logger.info(f"清理任务完成 - 总删除: {combined_stats['summary']['total_deleted']}")
+        return combined_stats
 
     except Exception as e:
         logger.error(f"清理过期文档失败: {e}")

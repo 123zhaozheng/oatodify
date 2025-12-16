@@ -651,26 +651,28 @@ async def manual_clean_version_duplicates(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"提交版本去重任务失败: {str(e)}")
 
-@router.post("/maintenance/clean-expired-documents", summary="手动清理过期文档")
+@router.post("/maintenance/clean-expired-documents", summary="手动清理过期文档和重复文档")
 async def manual_clean_expired_documents(
-    limit: int = Query(50, ge=1, le=200, description="每次处理的文档数量限制")
+    limit: int = Query(50, ge=1, le=5000, description="每次处理的文档数量限制"),
+    days: int = Query(5, ge=1, le=30, description="重复文档清理的时间范围（天数），默认5天")
 ):
     """
-    手动触发过期文档清理任务
+    手动触发过期文档和重复文档清理任务
 
     - 检查ai_metadata中的expiration_date
     - 对于没有元数据的文档，使用AI判断
     - 删除过期文档
+    - 增强：清理同前缀重复文档（保留最新的）
     """
     try:
         # 提交异步任务
-        task = clean_expired_documents.delay(limit)
+        task = clean_expired_documents.delay(limit, days)
 
         return {
             "success": True,
-            "message": f"过期文档清理任务已提交，限制处理: {limit} 个文档",
+            "message": f"过期文档和重复文档清理任务已提交，限制处理: {limit} 个文档，重复检查天数: {days} 天",
             "task_id": task.id,
-            "description": "任务将检查文档有效期并清理过期文档，请查看日志了解详细进度"
+            "description": "任务将检查文档有效期并清理过期文档，同时清理同前缀重复文档，请查看日志了解详细进度"
         }
 
     except Exception as e:

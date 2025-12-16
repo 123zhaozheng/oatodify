@@ -298,12 +298,12 @@ def trigger_clean_version_duplicates(limit=50):
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
-def trigger_clean_expired_documents(limit=50):
-    """触发过期文档清理"""
+def trigger_clean_expired_documents(limit=50, days=5):
+    """触发过期文档和重复文档清理"""
     try:
         # 使用maintenance API
         base_url = get_files_api_url("").rstrip('/files/')
-        url = f"{base_url}/maintenance/clean-expired-documents?limit={limit}"
+        url = f"{base_url}/maintenance/clean-expired-documents?limit={limit}&days={days}"
         response = requests.post(url, timeout=10)
         response.raise_for_status()
         return response.json()

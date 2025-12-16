@@ -632,6 +632,130 @@ class VersionManager:
             stats['errors'] += 1
             return stats
 
+    def process_duplicate_document_cleanup(self, db: Session, days: int = 5, limit: int = 2000) -> Dict:
+        """
+        清理重复文档（通过文件名前缀匹配）
+
+        查询最近N天内完成的文档，对每个文档通过前缀匹配查找更早完成的同前缀文档，
+        删除旧文档并将其状态标记为跳过。
+
+        Args:
+            db: 数据库会话
+            days: 查询最近多少天的文档，默认5天
+            limit: 每次处理的文档数量限制
+
+        Returns:
+            处理结果统计
+        """
+        import os
+        from datetime import timedelta
+
+        stats = {
+            'processed': 0,
+            'duplicates_found': 0,
+            'deleted': 0,
+            'errors': 0,
+            'details': []
+        }
+
+        try:
+            # 计算时间范围
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+
+            logger.info(f"开始清理重复文档 - 时间范围: {start_date.strftime('%Y-%m-%d')} 至 {end_date.strftime('%Y-%m-%d')}, 限制: {limit}")
+
+            # 查询指定时间范围内已完成的文档
+            recent_completed_docs = db.query(OAFileInfo).filter(
+                OAFileInfo.processing_status == ProcessingStatus.COMPLETED,
+                OAFileInfo.document_id.isnot(None),
+                OAFileInfo.processing_completed_at >= start_date,
+                OAFileInfo.processing_completed_at <= end_date
+            ).order_by(OAFileInfo.processing_completed_at.desc()).limit(limit).all()
+
+            logger.info(f"找到 {len(recent_completed_docs)} 个最近 {days} 天完成的文档")
+
+            # 用于记录已处理的前缀，避免重复处理
+            processed_prefixes = set()
+
+            for file_info in recent_completed_docs:
+                stats['processed'] += 1
+
+                try:
+                    # 获取文件名前缀（去掉扩展名）
+                    filename_prefix = os.path.splitext(file_info.imagefilename)[0] if file_info.imagefilename else ''
+
+                    if not filename_prefix:
+                        continue
+
+                    # 如果这个前缀已经处理过，跳过
+                    if filename_prefix in processed_prefixes:
+                        continue
+
+                    processed_prefixes.add(filename_prefix)
+
+                    # 使用前缀匹配查询所有同前缀的已完成文档
+                    prefix_pattern = f"{filename_prefix}.%"
+                    same_prefix_docs = db.query(OAFileInfo).filter(
+                        OAFileInfo.imagefilename.like(prefix_pattern),
+                        OAFileInfo.processing_status == ProcessingStatus.COMPLETED,
+                        OAFileInfo.document_id.isnot(None)
+                    ).order_by(OAFileInfo.processing_completed_at.desc()).all()
+
+                    # 如果只有一个同前缀文档，则不是重复
+                    if len(same_prefix_docs) <= 1:
+                        continue
+
+                    stats['duplicates_found'] += 1
+
+                    # 保留最新的文档（第一个），删除其他更早的文档
+                    latest_doc = same_prefix_docs[0]
+                    old_docs = same_prefix_docs[1:]
+
+                    logger.info(f"发现同前缀重复文档组 (前缀: {filename_prefix}):")
+                    logger.info(f"  - 最新文档: {latest_doc.imagefilename} (完成时间: {latest_doc.processing_completed_at})")
+                    logger.info(f"  - 旧文档数量: {len(old_docs)}")
+
+                    deleted_count = 0
+                    deleted_files = []
+
+                    for old_doc in old_docs:
+                        logger.info(f"  - 准备删除旧文档: {old_doc.imagefilename} (完成时间: {old_doc.processing_completed_at})")
+
+                        # 删除旧文档
+                        if self.delete_document_from_dify(old_doc, db):
+                            deleted_count += 1
+                            stats['deleted'] += 1
+                            deleted_files.append({
+                                'filename': old_doc.imagefilename,
+                                'completed_at': old_doc.processing_completed_at.isoformat() if old_doc.processing_completed_at else None
+                            })
+
+                            # 更新处理消息，说明是由于重复清理被删除
+                            old_doc.processing_message = f"同前缀新文档 {latest_doc.imagefilename} 已存在，重复清理任务已删除旧版本"
+                            db.commit()
+
+                    if deleted_count > 0:
+                        stats['details'].append({
+                            'prefix': filename_prefix,
+                            'latest_document': latest_doc.imagefilename,
+                            'deleted_count': deleted_count,
+                            'deleted_files': deleted_files
+                        })
+
+                except Exception as e:
+                    logger.error(f"处理文档重复清理时发生错误 {file_info.imagefilename}: {e}")
+                    stats['errors'] += 1
+                    continue
+
+            logger.info(f"重复文档清理完成 - 处理: {stats['processed']}, 发现重复组: {stats['duplicates_found']}, 删除: {stats['deleted']}, 错误: {stats['errors']}")
+            return stats
+
+        except Exception as e:
+            logger.error(f"处理重复文档清理失败: {e}")
+            stats['errors'] += 1
+            return stats
+
 
 # 创建全局实例
 version_manager = VersionManager()
