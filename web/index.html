@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>OA 文档中台</title>
+  <link rel="stylesheet" href="/web/styles.css">
+  <script src="/web/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="主导航">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">OA</div>
+        <div><strong>文档中台</strong><span>运营工作台</span></div>
+      </div>
+      <nav class="primary-nav">
+        <span class="nav-caption">工作空间</span>
+        <button class="nav-item is-active" data-page="overview" type="button"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/web/icons.svg#home"></use></svg><span>总览与每日过程</span></button>
+        <button class="nav-item" data-page="documents" type="button"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/web/icons.svg#file"></use></svg><span>文档处理</span></button>
+        <button class="nav-item" data-page="approvals" type="button"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/web/icons.svg#check"></use></svg><span>人工审核</span></button>
+        <button class="nav-item" data-page="cleanup" type="button"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/web/icons.svg#maintenance"></use></svg><span>清理维护</span></button>
+        <span class="nav-caption nav-caption-spaced">管理</span>
+        <button class="nav-item" data-page="settings" type="button"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/web/icons.svg#settings"></use></svg><span>系统配置</span></button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="sidebar-foot-icon" aria-hidden="true">i</div>
+        <div><strong>行内运行环境</strong><span>无需登录 · 操作留痕</span></div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-button mobile-menu" id="mobile-menu" type="button" aria-label="打开导航" aria-expanded="false"><svg class="ui-icon" aria-hidden="true"><use href="/web/icons.svg#menu"></use></svg></button>
+          <div class="breadcrumb"><span>OA 文档中台</span><span class="breadcrumb-divider">/</span><strong id="page-title">总览与每日过程</strong></div>
+        </div>
+        <div class="topbar-actions">
+          <label class="date-control" for="global-date"><span>统计日期</span><input type="date" id="global-date" aria-label="选择统计日期"></label>
+          <button class="button button-quiet refresh-toggle" id="refresh-toggle" type="button" aria-pressed="true"><span class="status-dot" aria-hidden="true"></span><span id="refresh-label">自动刷新 已开启</span></button>
+          <button class="button button-quiet" id="refresh-now" type="button"><svg class="ui-icon" aria-hidden="true"><use href="/web/icons.svg#refresh"></use></svg> 刷新</button>
+          <button class="button button-primary" id="run-action" type="button"><svg class="ui-icon" aria-hidden="true"><use href="/web/icons.svg#plus"></use></svg> 手动运行</button>
+        </div>
+      </header>
+
+      <main class="main-content" id="main-content" tabindex="-1" aria-live="polite">
+        <section class="page-loading" aria-label="正在加载"><span class="spinner" aria-hidden="true"></span><span>正在连接工作台…</span></section>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+  <div class="modal-layer" id="modal-layer" hidden>
+    <div class="modal-backdrop" data-close-modal="true"></div>
+    <section class="modal-card" id="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
+      <header class="modal-header"><div><h2 id="modal-title"></h2><p id="modal-description"></p></div><button class="icon-button" type="button" id="modal-close" aria-label="关闭">×</button></header>
+      <div class="modal-body" id="modal-body"></div>
+      <footer class="modal-footer" id="modal-footer"></footer>
+    </section>
+  </div>
+
+  <div class="drawer-layer" id="drawer-layer" hidden>
+    <div class="drawer-backdrop" data-close-drawer="true"></div>
+    <aside class="detail-drawer" id="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
+      <header class="drawer-header"><div><p class="eyebrow">文档详情</p><h2 id="drawer-title">正在读取…</h2></div><button class="icon-button" type="button" id="drawer-close" aria-label="关闭详情">×</button></header>
+      <div class="drawer-body" id="drawer-body"><section class="page-loading"><span class="spinner" aria-hidden="true"></span><span>正在读取文档信息…</span></section></div>
+    </aside>
+  </div>
+</body>
+</html>

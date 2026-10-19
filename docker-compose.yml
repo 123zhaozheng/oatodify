@@ -1,7 +1,11 @@
-﻿# =============================================================================
+# =============================================================================
 # OA文档处理系统 Docker Compose 配置
 # 应用服务栈：API、前端、Worker等（数据库和缓存使用外部服务）
 # =============================================================================
+
+# 固定项目名：内网 docker load 导入的是 oatodify-xxx 镜像标签，
+# 解压目录名不同时 compose 仍能匹配镜像，不会尝试重新构建。
+name: oatodify
 
 services:
   # ===========================================
@@ -17,6 +21,7 @@ services:
     ports:
       - "18000:8000"
     volumes:
+      - runtime_config:/app/config
       - ./logs:/app/logs
       - ./temp:/app/temp
     healthcheck:
@@ -34,6 +39,7 @@ services:
   # Streamlit 前端服务
   # ===========================================
   frontend:
+    profiles: ["legacy-ui"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -45,6 +51,7 @@ services:
     ports:
       - "8501:8501"
     volumes:
+      - runtime_config:/app/config
       - ./logs:/app/logs
       - ./temp:/app/temp
     depends_on:
@@ -70,6 +77,7 @@ services:
     env_file:
       - .env
     volumes:
+      - runtime_config:/app/config
       - ./logs:/app/logs
       - ./temp:/app/temp
     restart: unless-stopped
@@ -90,6 +98,7 @@ services:
     env_file:
       - .env
     volumes:
+      - runtime_config:/app/config
       - ./logs:/app/logs
       - beat_schedule:/tmp
     restart: unless-stopped
@@ -107,6 +116,8 @@ services:
     container_name: oa-flower
     env_file:
       - .env
+    volumes:
+      - runtime_config:/app/config
     ports:
       - "5555:5555"
     restart: unless-stopped
@@ -209,6 +220,8 @@ networks:
 # 数据卷配置
 # ===========================================
 volumes:
+  runtime_config:
+    driver: local
   beat_schedule:
     driver: local
   postgres_data:
@@ -227,7 +240,7 @@ volumes:
 #    docker-compose up -d
 # 
 # 2. 启动部分服务:
-#    docker-compose up -d api frontend  # 只启动API和前端
+#    docker-compose up -d api  # FastAPI同时提供新版静态前端
 #    docker-compose up -d worker beat   # 只启动后台任务
 # 
 # 3. 查看服务状态:
@@ -249,7 +262,8 @@ volumes:
 # 
 # 8. 服务访问地址:
 #    - API 文档: http://localhost:8000/docs
-#    - 前端界面: http://localhost:8501
+#    - 新版中文前端: http://localhost:18000
+#    - 旧版Streamlit（legacy-ui profile）: http://localhost:8501
 #    - Flower 监控: http://localhost:5555
 #    - Nginx (如启用): http://localhost
 # 

@@ -81,3 +81,6 @@ docs/_build/
 node_modules/
 dist/
 staticf
+
+# 补丁合并包不入库
+patch/

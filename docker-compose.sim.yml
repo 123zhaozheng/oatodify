@@ -1,0 +1,10 @@
+# 本地仿真 overlay：只给 api/worker 挂仿真 NAS 与 DAT 目录，不改主 compose。
+services:
+  api:
+    volumes:
+      - D:/oato-sim/sim-nas:/xxx/xxx/xxx:ro
+      - D:/oato-sim/sim-dat:/data/dat_files:ro
+  worker:
+    volumes:
+      - D:/oato-sim/sim-nas:/xxx/xxx/xxx:ro
+      - D:/oato-sim/sim-dat:/data/dat_files:ro

@@ -1,0 +1,160 @@
+# =============================================================================
+# OA文档处理系统 内网专用编排（单一文件，NAS/DAT 挂载已内联）
+# 用法：改好同目录 .env 后
+#   docker compose run --rm api migrate   （首次/升级时执行数据库迁移）
+#   docker compose up -d postgres redis && docker compose up -d api worker beat flower
+# 说明：frontend（旧 Streamlit）与 document-parser（解析服务）不在本文件中；
+#       解析服务地址在 .env 的 DOCUMENT_PARSE_API_URL 配置。
+# =============================================================================
+
+name: oatodify
+
+services:
+  # ===========================================
+  # FastAPI 后端 + 新版中文工作台
+  # ===========================================
+  api:
+    image: oatodify-api:latest
+    container_name: oa-api
+    env_file:
+      - .env
+    ports:
+      - "18000:8000"
+    volumes:
+      - runtime_config:/app/config
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+      # NAS 只读挂载，目标跟随 NAS_ROOT（同路径部署时数据路径即容器路径）
+      - type: bind
+        source: ${NAS_HOST_PATH:?请在.env设置宿主机NAS挂载目录NAS_HOST_PATH}
+        target: ${NAS_ROOT:-/mnt/oa}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAT_HOST_PATH:?请在.env设置宿主机DAT目录DAT_HOST_PATH}
+        target: /data/dat_files
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    command: ["fastapi"]
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Celery Worker（×2 副本）
+  # ===========================================
+  worker:
+    image: oatodify-worker:latest
+    env_file:
+      - .env
+    volumes:
+      - runtime_config:/app/config
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+      - type: bind
+        source: ${NAS_HOST_PATH:?请在.env设置宿主机NAS挂载目录NAS_HOST_PATH}
+        target: ${NAS_ROOT:-/mnt/oa}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAT_HOST_PATH:?请在.env设置宿主机DAT目录DAT_HOST_PATH}
+        target: /data/dat_files
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    command: ["celery-worker"]
+    deploy:
+      replicas: 2
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Celery Beat 定时任务调度器
+  # ===========================================
+  beat:
+    image: oatodify-beat:latest
+    container_name: oa-beat
+    env_file:
+      - .env
+    volumes:
+      - runtime_config:/app/config
+      - ./logs:/app/logs
+      - beat_schedule:/tmp
+    restart: unless-stopped
+    command: ["celery-beat"]
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Celery Flower 监控界面
+  # ===========================================
+  flower:
+    image: oatodify-flower:latest
+    container_name: oa-flower
+    env_file:
+      - .env
+    volumes:
+      - runtime_config:/app/config
+    ports:
+      - "5555:5555"
+    restart: unless-stopped
+    command: ["celery-flower"]
+    networks:
+      - oa-network
+
+  # ===========================================
+  # PostgreSQL 数据库（如用行内统一库，删除本服务并改 .env 的 DATABASE_URL）
+  # ===========================================
+  postgres:
+    image: postgres:15
+    container_name: oa-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=oa_docs
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - oa-network
+
+  # ===========================================
+  # Redis 缓存（如用行内统一 Redis，删除本服务并改 .env 的 REDIS_URL）
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: oa-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - oa-network
+
+networks:
+  oa-network:
+    driver: bridge
+
+volumes:
+  runtime_config:
+    driver: local
+  beat_schedule:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

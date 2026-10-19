@@ -1,0 +1,31 @@
+# docker compose -f docker-compose.yml -f docker-compose.nas.yml up -d --build
+# 宿主机先完成 NAS 挂载；此文件不会替你挂载 NAS，也不会创建缺失的宿主机目录。
+services:
+  api:
+    volumes:
+      - type: bind
+        source: ${NAS_HOST_PATH:?请设置宿主机NAS挂载目录}
+        target: ${NAS_ROOT:-/mnt/oa}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAT_HOST_PATH:?请设置宿主机DAT目录}
+        target: /data/dat_files
+        read_only: true
+        bind:
+          create_host_path: false
+  worker:
+    volumes:
+      - type: bind
+        source: ${NAS_HOST_PATH:?请设置宿主机NAS挂载目录}
+        target: ${NAS_ROOT:-/mnt/oa}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAT_HOST_PATH:?请设置宿主机DAT目录}
+        target: /data/dat_files
+        read_only: true
+        bind:
+          create_host_path: false
