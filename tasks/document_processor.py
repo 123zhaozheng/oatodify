@@ -1,11 +1,11 @@
-﻿from celery import Celery
-from celery.signals import worker_ready
+from celery import Celery
+from celery.signals import after_task_publish, task_failure, task_postrun, task_prerun, task_retry
 import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
 from database import get_db_session
 from models import OAFileInfo, ProcessingLog, ProcessingStatus, BusinessCategory
-from services.s3_service import s3_service
+from services.file_storage import file_storage
 from services.decryption_service import decryption_service
 from services.api_document_parser import api_document_parser
 from services.ai_analyzer import ai_analyzer
@@ -14,7 +14,9 @@ from services.file_filter import file_filter
 from services.version_manager import version_manager
 from services.dat_importer import import_dat_file, get_latest_dat_file
 from config import settings
+from services import operations
 import json
+import hashlib
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -32,12 +34,68 @@ app.conf.update(
     enable_utc=True,
     task_routes={
         'tasks.document_processor.process_document': {'queue': 'document_processing'},
-        'tasks.document_processor.batch_process_documents': {'queue': 'batch_processing'},
+        'batch_process_documents': {'queue': 'batch_processing'},
         'tasks.document_processor.approve_document': {'queue': 'document_processing'},
-        'tasks.document_processor.import_dat_file_task': {'queue': 'data_import'},
+        'import_dat_file_task': {'queue': 'data_import'},
     },
     task_default_queue='document_processing'
 )
+
+
+def _signal_task_name(sender=None, task=None, headers=None):
+    candidate = getattr(task, 'name', None) or getattr(sender, 'name', None) or sender
+    if not isinstance(candidate, str) and headers:
+        candidate = headers.get('task')
+    return candidate if isinstance(candidate, str) else None
+
+
+@after_task_publish.connect(weak=False, dispatch_uid='oa_operations_after_task_publish')
+def track_published_task(sender=None, headers=None, body=None, **kwargs):
+    headers = headers or {}
+    task_id = headers.get('id')
+    task_name = _signal_task_name(sender=sender, headers=headers)
+    if not task_id and isinstance(body, tuple) and len(body) > 2 and isinstance(body[2], dict):
+        task_id = body[2].get('id')
+    if task_id and task_name:
+        operations.record_job_published(str(task_id), task_name)
+
+
+@task_prerun.connect(weak=False, dispatch_uid='oa_operations_task_prerun')
+def refresh_runtime_settings_and_track(sender=None, task_id=None, task=None, **kwargs):
+    # Runtime values are refreshed before every task starts; the current task then
+    # runs against one stable configuration snapshot.
+    from services.runtime_config import refresh_runtime_settings
+    try:
+        refresh_runtime_settings()
+    except Exception as exc:
+        logger.warning("Worker热配置刷新失败（%s）", type(exc).__name__)
+
+    task_name = _signal_task_name(sender=sender, task=task)
+    if task_id and task_name:
+        operations.record_job_started(str(task_id), task_name)
+
+
+@task_postrun.connect(weak=False, dispatch_uid='oa_operations_task_postrun')
+def track_finished_task(sender=None, task_id=None, task=None, state=None, retval=None, **kwargs):
+    task_name = _signal_task_name(sender=sender, task=task)
+    if task_id and task_name:
+        operations.record_job_finished(str(task_id), task_name, state or "", retval)
+
+
+@task_failure.connect(weak=False, dispatch_uid='oa_operations_task_failure')
+def track_failed_task(sender=None, task_id=None, exception=None, **kwargs):
+    task_name = _signal_task_name(sender=sender)
+    if task_id and task_name:
+        exception_type = type(exception).__name__ if exception is not None else None
+        operations.record_job_failure(str(task_id), task_name, exception_type)
+
+
+@task_retry.connect(weak=False, dispatch_uid='oa_operations_task_retry')
+def track_retried_task(sender=None, request=None, **kwargs):
+    task_id = getattr(request, 'id', None)
+    task_name = _signal_task_name(sender=sender)
+    if task_id and task_name:
+        operations.record_job_retry(str(task_id), task_name)
 
 def log_processing_step(file_id: str, step: str, status: str, message: str, duration: int = None):
     """记录处理步骤日志"""
@@ -56,10 +114,11 @@ def log_processing_step(file_id: str, step: str, status: str, message: str, dura
     except Exception as e:
         logger.error(f"记录处理日志失败: {e}")
 
-def update_file_status(file_id: str, status: ProcessingStatus, message: str = None):
+def update_file_status(file_id: str, status: ProcessingStatus, message: str = None, db=None):
     """更新文件处理状态"""
+    owned_session = db is None
+    db = db or get_db_session()
     try:
-        db = get_db_session()
         file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == file_id).first()
         if file_info:
             file_info.processing_status = status
@@ -72,11 +131,15 @@ def update_file_status(file_id: str, status: ProcessingStatus, message: str = No
                 file_info.processing_completed_at = datetime.now()
 
             db.commit()
-        db.close()
     except Exception as e:
+        db.rollback()
         logger.error(f"更新文件状态失败: {e}")
+        raise
+    finally:
+        if owned_session:
+            db.close()
 
-def can_process_file(file_id: str) -> bool:
+def can_process_file(file_id: str, allow_retry: bool = False) -> bool:
     """检查文件是否可以被处理（防止重复处理已跳过的文档）"""
     try:
         db = get_db_session()
@@ -88,7 +151,8 @@ def can_process_file(file_id: str) -> bool:
             return False
 
         # 只有 PENDING 状态的文档才能被处理
-        if file_info.processing_status != ProcessingStatus.PENDING:
+        if file_info.processing_status != ProcessingStatus.PENDING and not (
+            allow_retry and file_info.processing_status == ProcessingStatus.FAILED):
             logger.info(f"文件 {file_id} 状态为 {file_info.processing_status.value}，跳过处理")
             return False
 
@@ -101,18 +165,19 @@ def can_process_file(file_id: str) -> bool:
 def process_document(self, file_id: str):
     """
     处理单个文档的完整流程 - 支持多知识库和分类映射
-    
+
     Args:
         file_id: 文件ID
     """
     start_time = datetime.now()
     db = None
-    
+    file_info = None
+
     try:
         logger.info(f"开始处理文档: {file_id}")
 
         # 检查文件是否可以被处理（防止重复处理已跳过的文档）
-        if not can_process_file(file_id):
+        if not can_process_file(file_id, allow_retry=self.request.retries > 0):
             logger.info(f"文档 {file_id} 无法处理，可能已被跳过或正在处理中")
             return {'success': False, 'error': '文档无法处理，状态不正确'}
 
@@ -123,14 +188,29 @@ def process_document(self, file_id: str):
         if not file_info:
             logger.error(f"文件信息不存在: {file_id}")
             return {'success': False, 'error': '文件信息不存在'}
-        
+
+        # 条件更新抢占任务，重复投递不会重复入库；重试只允许 FAILED -> DOWNLOADING。
+        expected = ProcessingStatus.FAILED if self.request.retries > 0 else ProcessingStatus.PENDING
+        claimed = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == file_id,
+                                            OAFileInfo.processing_status == expected).update({
+            OAFileInfo.processing_status: ProcessingStatus.DOWNLOADING,
+            OAFileInfo.processing_started_at: datetime.now(),
+        }, synchronize_session=False)
+        db.commit()
+        if not claimed:
+            return {'success': False, 'error': '文档已被其他任务接手'}
+        db.refresh(file_info)
+
+        def set_status(status, message):
+            update_file_status(file_id, status, message, db=db)
+
         # 步骤0: 文件筛选检查
         # logger.info(f"开始文件筛选检查: {file_id}")
         # filter_result = file_filter.should_process_file(file_info)
 
         # if not filter_result['should_process']:
         #     logger.info(f"文件筛选未通过: {file_id} - {filter_result['skip_reason']}")
-        #     update_file_status(file_id, ProcessingStatus.SKIPPED, f"筛选未通过: {filter_result['skip_reason']}")
+        #     set_status(ProcessingStatus.SKIPPED, f"筛选未通过: {filter_result['skip_reason']}")
         #     log_processing_step(file_id, "filter_check", "skipped",
         #                       f"筛选未通过: {filter_result['skip_reason']} (应用筛选器: {', '.join(filter_result['filters_applied'])})")
         #     return {
@@ -142,13 +222,13 @@ def process_document(self, file_id: str):
         # logger.info(f"文件筛选通过: {file_id} (应用筛选器: {', '.join(filter_result['filters_applied'])})")
         # log_processing_step(file_id, "filter_check", "success",
         #                   f"筛选通过 (应用筛选器: {', '.join(filter_result['filters_applied'])})")
-        
-        update_file_status(file_id, ProcessingStatus.DOWNLOADING, "开始下载")
-        
-        # 步骤1: 从S3下载文档
+
+        set_status(ProcessingStatus.DOWNLOADING, "开始下载")
+
+        # 步骤1: 读取挂载NAS或兼容S3文档
         step_start = datetime.now()
         try:
-            file_data = s3_service.download_file(file_info.tokenkey)
+            file_data = file_storage.download_file(file_info)
             step_duration = (datetime.now() - step_start).seconds
             log_processing_step(file_id, "download", "success",
                               f"下载成功，大小: {len(file_data)} 字节", step_duration)
@@ -157,44 +237,41 @@ def process_document(self, file_id: str):
             step_duration = (datetime.now() - step_start).seconds
             error_msg = f"下载失败: {str(e)}"
             log_processing_step(file_id, "download", "failed", error_msg, step_duration)
-            update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+            set_status(ProcessingStatus.FAILED, error_msg)
             file_info.error_count = (file_info.error_count or 0) + 1
             file_info.last_error = error_msg
             db.commit()
             raise
-        
-        update_file_status(file_id, ProcessingStatus.DECRYPTING, "开始解密")
-        
+
+        set_status(ProcessingStatus.DECRYPTING, "开始解密")
+
         # 步骤2: 解密文档
         step_start = datetime.now()
         try:
-            if file_info.asecode:
-                decrypted_data = decryption_service.decrypt_binary_data(file_data, file_info.asecode)
-            else:
-                decrypted_data = file_data  # 如果没有解密密码，直接使用原数据
-            
+            decrypted_data = file_storage.decrypt_file(file_data, file_info)
+
             step_duration = (datetime.now() - step_start).seconds
-            log_processing_step(file_id, "decrypt", "success", 
+            log_processing_step(file_id, "decrypt", "success",
                               f"解密成功，大小: {len(decrypted_data)} 字节", step_duration)
         except Exception as e:
             step_duration = (datetime.now() - step_start).seconds
             error_msg = f"解密失败: {str(e)}"
             log_processing_step(file_id, "decrypt", "failed", error_msg, step_duration)
-            update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+            set_status(ProcessingStatus.FAILED, error_msg)
             file_info.error_count = (file_info.error_count or 0) + 1
             file_info.last_error = error_msg
             db.commit()
             raise
-        
-        update_file_status(file_id, ProcessingStatus.PARSING, "开始解析")
-        
+
+        set_status(ProcessingStatus.PARSING, "开始解析")
+
         # 步骤3: 解析文档内容
         step_start = datetime.now()
         try:
             # 用于存储最终处理的文件内容和名称（用于后续Dify上传）
             final_file_content = decrypted_data
             final_filename = file_info.imagefilename
-            
+
             # 如果是ZIP文件，先提取唯一文件的二进制内容
             if file_info.is_zip :
                 extracted_content = decryption_service.extract_zip_files(decrypted_data)
@@ -205,35 +282,37 @@ def process_document(self, file_id: str):
                 logger.info(f"ZIP文件处理：使用单一文件 {final_filename} ({len(final_file_content)} 字节) 用于知识库上传")
             else:
                 parse_result = api_document_parser.parse_document(decrypted_data, file_info.imagefilename)
-            
+
             step_duration = (datetime.now() - step_start).seconds
-            
+
             if not parse_result['success']:
                 error_msg = f"解析失败: {parse_result['error']}"
                 log_processing_step(file_id, "parse", "failed", error_msg, step_duration)
-                update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                set_status(ProcessingStatus.FAILED, error_msg)
                 file_info.error_count = (file_info.error_count or 0) + 1
                 file_info.last_error = error_msg
                 db.commit()
                 return {'success': False, 'error': error_msg}
-            
+
             content = parse_result['content']
+            file_info.parsed_content = content
+            file_info.content_sha256 = hashlib.sha256(content.encode('utf-8')).hexdigest()
             metadata = parse_result['metadata']
-            
-            log_processing_step(file_id, "parse", "success", 
+
+            log_processing_step(file_id, "parse", "success",
                               f"解析成功，内容长度: {len(content)} 字符", step_duration)
         except Exception as e:
             step_duration = (datetime.now() - step_start).seconds
             error_msg = f"解析失败: {str(e)}"
             log_processing_step(file_id, "parse", "failed", error_msg, step_duration)
-            update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+            set_status(ProcessingStatus.FAILED, error_msg)
             file_info.error_count = (file_info.error_count or 0) + 1
             file_info.last_error = error_msg
             db.commit()
             raise
-        
-        update_file_status(file_id, ProcessingStatus.ANALYZING, "AI分析中")
-        
+
+        set_status(ProcessingStatus.ANALYZING, "AI分析中")
+
         # 步骤4: 增强版AI分析 - 支持分类映射和多知识库
         step_start = datetime.now()
         target_knowledge_base = None
@@ -247,24 +326,24 @@ def process_document(self, file_id: str):
                 'is_zw': file_info.is_zw,
                 'filesize': file_info.filesize
             }
-            
+
             # 使用新的AI分析器，返回分析结果和目标知识库
             analysis_result, target_knowledge_base = ai_analyzer.analyze_document_content(
                 content, file_info.imagefilename, file_info_dict, metadata
             )
-            
+
             step_duration = (datetime.now() - step_start).seconds
-            
+
             kb_info = target_knowledge_base.name if target_knowledge_base else "未找到目标知识库"
-            log_processing_step(file_id, "analyze", "success", 
-                              f"分析完成 [分类: {file_info.business_category.value}]，适合知识库: {analysis_result['suitable_for_kb']}, 目标知识库: {kb_info}", 
+            log_processing_step(file_id, "analyze", "success",
+                              f"分析完成 [分类: {file_info.business_category.value}]，适合知识库: {analysis_result['suitable_for_kb']}, 目标知识库: {kb_info}",
                               step_duration)
-            
+
             # 保存分析结果
             file_info.ai_analysis_result = json.dumps(analysis_result, ensure_ascii=False)
             file_info.ai_confidence_score = analysis_result['confidence_score']
             file_info.should_add_to_kb = analysis_result['suitable_for_kb']
-            
+
         except Exception as e:
             step_duration = (datetime.now() - step_start).seconds
             error_msg = f"AI分析失败: {str(e)}"
@@ -280,12 +359,12 @@ def process_document(self, file_id: str):
             file_info.ai_analysis_result = json.dumps(analysis_result, ensure_ascii=False)
             file_info.ai_confidence_score = 0
             file_info.should_add_to_kb = False
-        
+
         # 步骤5: 决定下一步处理 - 使用分类特定的阈值
         processor_config = analysis_result.get('processor_config', {})
         auto_approve_threshold = processor_config.get('auto_approve_threshold', 80)
         min_confidence = processor_config.get('min_confidence_score', 40)
-        
+
         if analysis_result['suitable_for_kb'] and analysis_result['confidence_score'] >= auto_approve_threshold:
             # 高置信度，直接加入知识库
             step_start = datetime.now()
@@ -297,7 +376,7 @@ def process_document(self, file_id: str):
                 else:
                     dify_service_instance = dify_service  # 使用默认服务
                     logger.warning("使用默认知识库服务")
-                
+
                 # 使用文本内容直接传入Dify，使用父子分段策略
                 dify_result = dify_service_instance.add_document_to_knowledge_base_by_text(
                     content, final_filename, {
@@ -307,49 +386,51 @@ def process_document(self, file_id: str):
                         'business_category': file_info.business_category.value if file_info.business_category else 'unknown'
                     }
                 )
-                
+
                 step_duration = (datetime.now() - step_start).seconds
-                
+
                 if dify_result['success']:
                     file_info.document_id = dify_result.get('document_id')
+                    file_info.dify_dataset_id = dify_service_instance.dataset_id
+                    file_info.knowledge_base_id = target_knowledge_base.id if target_knowledge_base else None
                     kb_name = dify_result.get('knowledge_base_name', 'unknown')
-                    update_file_status(file_id, ProcessingStatus.COMPLETED, f"已成功加入知识库: {kb_name}")
-                    log_processing_step(file_id, "add_to_kb", "success", 
-                                      f"成功加入知识库 [{kb_name}]: {dify_result.get('document_id')}", 
+                    set_status(ProcessingStatus.COMPLETED, f"已成功加入知识库: {kb_name}")
+                    log_processing_step(file_id, "add_to_kb", "success",
+                                      f"成功加入知识库 [{kb_name}]: {dify_result.get('document_id')}",
                                       step_duration)
                 else:
                     error_msg = f"加入知识库失败: {dify_result['error']}"
-                    update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                    set_status(ProcessingStatus.FAILED, error_msg)
                     log_processing_step(file_id, "add_to_kb", "failed", error_msg, step_duration)
                     file_info.error_count = (file_info.error_count or 0) + 1
                     file_info.last_error = error_msg
-                
+
             except Exception as e:
                 step_duration = (datetime.now() - step_start).seconds
                 error_msg = f"加入知识库异常: {str(e)}"
                 log_processing_step(file_id, "add_to_kb", "failed", error_msg, step_duration)
-                update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                set_status(ProcessingStatus.FAILED, error_msg)
                 file_info.error_count = (file_info.error_count or 0) + 1
                 file_info.last_error = error_msg
-        
+
         elif analysis_result['suitable_for_kb'] and analysis_result['confidence_score'] >= min_confidence:
             # 中等置信度，需要人工审核
             kb_info = target_knowledge_base.name if target_knowledge_base else "默认知识库"
-            update_file_status(file_id, ProcessingStatus.AWAITING_APPROVAL, f"等待人工审核 (目标知识库: {kb_info})")
-            log_processing_step(file_id, "review", "pending", 
+            set_status(ProcessingStatus.AWAITING_APPROVAL, f"等待人工审核 (目标知识库: {kb_info})")
+            log_processing_step(file_id, "review", "pending",
                               f"置信度{analysis_result['confidence_score']}%，需要人工审核 (目标知识库: {kb_info})")
-        
+
         else:
             # 低置信度，跳过
-            update_file_status(file_id, ProcessingStatus.SKIPPED, 
+            set_status(ProcessingStatus.SKIPPED,
                              f"置信度过低({analysis_result['confidence_score']}%)，已跳过")
             log_processing_step(file_id, "skip", "success", "置信度过低，自动跳过")
-        
+
         db.commit()
-        
+
         total_duration = (datetime.now() - start_time).seconds
         logger.info(f"文档处理完成: {file_id}, 耗时: {total_duration}秒, 目标知识库: {target_knowledge_base.name if target_knowledge_base else 'None'}")
-        
+
         return {
             'success': True,
             'file_id': file_id,
@@ -361,25 +442,25 @@ def process_document(self, file_id: str):
                 'name': target_knowledge_base.name if target_knowledge_base else None
             }
         }
-        
+
     except Exception as e:
         logger.error(f"处理文档时发生未知错误: {e}")
         import traceback
         traceback.print_exc()
-        
+
         if db and file_info:
             file_info.error_count = (file_info.error_count or 0) + 1
             file_info.last_error = str(e)
-            update_file_status(file_id, ProcessingStatus.FAILED, f"未知错误: {str(e)}")
+            set_status(ProcessingStatus.FAILED, f"未知错误: {str(e)}")
             db.commit()
-        
+
         # 重试机制
         if self.request.retries < self.max_retries:
             logger.info(f"准备重试处理文档: {file_id}, 重试次数: {self.request.retries + 1}")
             raise self.retry(countdown=300, exc=e)
-        
+
         return {'success': False, 'error': str(e)}
-    
+
     finally:
         if db:
             db.close()
@@ -388,13 +469,13 @@ def process_document(self, file_id: str):
 def batch_process_documents(limit: int = 10):
     """
     批量处理待处理的文档
-    
+
     Args:
         limit: 每次处理的文档数量限制
     """
     try:
         db = get_db_session()
-        
+
         # 查询待处理的正文文档，排除已跳过的文档
         pending_files = db.query(OAFileInfo).filter(
             OAFileInfo.is_zw == True,
@@ -428,9 +509,9 @@ def batch_process_documents(limit: int = 10):
 
         logger.info(f"批量处理预筛选完成: 原始 {len(pending_files)} 个，筛选后 {len(filtered_files)} 个，跳过 {skipped_count} 个")
         pending_files = filtered_files
-        
+
         logger.info(f"找到 {len(pending_files)} 个待处理文档")
-        
+
         results = []
         for file_info in pending_files:
             try:
@@ -449,15 +530,15 @@ def batch_process_documents(limit: int = 10):
                     'file_id': file_info.imagefileid,
                     'error': str(e)
                 })
-        
+
         db.close()
-        
+
         return {
             'success': True,
             'processed_count': len(results),
             'results': results
         }
-        
+
     except Exception as e:
         logger.error(f"批量处理文档失败: {e}")
         return {
@@ -475,6 +556,7 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
         approved: 是否通过审核
         reviewer_comment: 审核意见
     """
+    db = None
     try:
         db = get_db_session()
         file_info = db.query(OAFileInfo).filter(OAFileInfo.imagefileid == file_id).first()
@@ -485,22 +567,33 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
         if file_info.processing_status != ProcessingStatus.AWAITING_APPROVAL:
             return {'success': False, 'error': '文档状态不正确，无法审核'}
 
+        # 审核任务可能被重复提交，条件更新保证只由一个任务继续处理。
+        claimed = db.query(OAFileInfo).filter(
+            OAFileInfo.imagefileid == file_id,
+            OAFileInfo.processing_status == ProcessingStatus.AWAITING_APPROVAL,
+        ).update({OAFileInfo.processing_status: ProcessingStatus.DOWNLOADING if approved else ProcessingStatus.SKIPPED},
+                 synchronize_session=False)
+        db.commit()
+        if not claimed:
+            return {'success': False, 'error': '审核已被其他任务接手'}
+        db.refresh(file_info)
+
+        def set_status(status, message):
+            update_file_status(file_id, status, message, db=db)
+
         if approved:
             # 审核通过，加入知识库
             try:
                 # 重新解析分析结果
                 analysis_result = json.loads(file_info.ai_analysis_result or '{}')
 
-                # 重新从S3下载文档内容并解析
+                # 重新读取挂载NAS或兼容S3文档内容并解析
                 try:
-                    file_data = s3_service.download_file(file_info.tokenkey)
+                    file_data = file_storage.download_file(file_info)
                     logger.info(f"重新下载文件成功，准备解析并加入知识库: {file_info.imagefilename}")
 
                     # 解密文档
-                    if file_info.asecode:
-                        decrypted_data = decryption_service.decrypt_binary_data(file_data, file_info.asecode)
-                    else:
-                        decrypted_data = file_data
+                    decrypted_data = file_storage.decrypt_file(file_data, file_info)
 
                     # 解析文档内容（与自动流程保持一致：ZIP需先解压取唯一文件内容）
                     if file_info.is_zip:
@@ -512,16 +605,18 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
                     if not parse_result['success']:
                         error_msg = f"重新解析文档失败: {parse_result['error']}"
                         logger.error(error_msg)
-                        update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                        set_status(ProcessingStatus.FAILED, error_msg)
                         log_processing_step(file_id, "manual_approve", "failed", error_msg)
                         return {'success': False, 'error': error_msg}
 
                     content = parse_result['content']
+                    file_info.parsed_content = content
+                    file_info.content_sha256 = hashlib.sha256(content.encode('utf-8')).hexdigest()
 
                 except Exception as e:
                     error_msg = f"重新处理文件失败: {str(e)}"
                     logger.error(error_msg)
-                    update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                    set_status(ProcessingStatus.FAILED, error_msg)
                     log_processing_step(file_id, "manual_approve", "failed", error_msg)
                     return {'success': False, 'error': error_msg}
 
@@ -547,49 +642,57 @@ def approve_document(file_id: str, approved: bool, reviewer_comment: str = ""):
 
                 if dify_result['success']:
                     file_info.document_id = dify_result.get('document_id')
+                    file_info.dify_dataset_id = dify_service_instance.dataset_id
+                    file_info.knowledge_base_id = target_kb.id if target_kb else None
                     kb_name = dify_result.get('knowledge_base_name', target_kb.name if target_kb else 'unknown')
-                    update_file_status(file_id, ProcessingStatus.COMPLETED,
+                    set_status(ProcessingStatus.COMPLETED,
                                      f"人工审核通过并加入知识库 [{kb_name}]: {reviewer_comment}")
                     log_processing_step(file_id, "manual_approve", "success",
                                       f"审核通过，加入知识库 [{kb_name}]: {reviewer_comment}")
                 else:
                     error_msg = f"加入知识库失败: {dify_result['error']}"
-                    update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                    set_status(ProcessingStatus.FAILED, error_msg)
                     log_processing_step(file_id, "manual_approve", "failed", error_msg)
 
             except Exception as e:
                 error_msg = f"审核通过后处理失败: {str(e)}"
-                update_file_status(file_id, ProcessingStatus.FAILED, error_msg)
+                set_status(ProcessingStatus.FAILED, error_msg)
                 log_processing_step(file_id, "manual_approve", "failed", error_msg)
         else:
             # 审核不通过，跳过
-            update_file_status(file_id, ProcessingStatus.SKIPPED,
+            set_status(ProcessingStatus.SKIPPED,
                              f"人工审核未通过: {reviewer_comment}")
             log_processing_step(file_id, "manual_reject", "success",
                               f"审核未通过: {reviewer_comment}")
 
         db.commit()
+        final_status = file_info.processing_status.value
         db.close()
 
-        return {'success': True, 'approved': approved}
+        return {'success': final_status != ProcessingStatus.FAILED.value, 'approved': approved, 'status': final_status}
 
     except Exception as e:
         logger.error(f"人工审核失败: {e}")
         return {'success': False, 'error': str(e)}
+    finally:
+        if db is not None:
+            db.close()
 
 @app.task(name='clean_headquarters_version_duplicates')
-def clean_headquarters_version_duplicates(limit: int = 50):
+def clean_headquarters_version_duplicates(limit: int = 50, dry_run: bool = None):
     """
     清理总行发文的版本重复文档
 
     Args:
         limit: 每次处理的文档数量限制
     """
+    if dry_run is None:
+        dry_run = not settings.cleanup_auto_delete
     try:
         db = get_db_session()
         logger.info(f"开始清理总行发文版本重复，限制处理: {limit} 个文档")
 
-        stats = version_manager.process_headquarters_version_deduplication(db, limit)
+        stats = version_manager.process_headquarters_version_deduplication(db, limit, dry_run=dry_run)
 
         db.close()
 
@@ -604,35 +707,38 @@ def clean_headquarters_version_duplicates(limit: int = 50):
         }
 
 @app.task(name='clean_expired_documents')
-def clean_expired_documents(limit: int = 50, days: int = 5):
+def clean_expired_documents(limit: int = 50, days: int = 5, dry_run: bool = None):
     """
-    1.清理过期文档（除总行发文外）
-    2.清理重复文档（增强）- 通过文件名前缀匹配
-    
+    轮转检查全部文档有效期和同分类、同数据集的完整正文重复。
+    默认只保存清理建议，执行删除须经审核或显式配置的自动模式。
+
 
     Args:
         limit: 每次处理的文档数量限制
-        days: 重复文档清理的时间范围（天数），默认5天
+        days: 为旧接口保留的兼容参数，扫描范围已覆盖全部历史
     """
+    if dry_run is None:
+        dry_run = not settings.cleanup_auto_delete
     try:
         db = get_db_session()
         logger.info(f"开始清理过期文档和重复文档，限制处理: {limit} 个文档，重复检查天数: {days} 天")
 
         # 1. 清理过期文档
         logger.info("===== 阶段1: 清理过期文档 =====")
-        expiration_stats = version_manager.process_document_expiration_check(db, limit)
+        expiration_stats = version_manager.process_document_expiration_check(db, limit, dry_run=dry_run)
         logger.info(f"过期文档清理完成 - 统计: {expiration_stats}")
 
         # 2. 清理重复文档（增强）
         logger.info("===== 阶段2: 清理重复文档 =====")
-        duplicate_stats = version_manager.process_duplicate_document_cleanup(db, days=days, limit=limit)
+        duplicate_stats = version_manager.process_duplicate_document_cleanup(db, days=days, limit=limit, dry_run=dry_run)
         logger.info(f"重复文档清理完成 - 统计: {duplicate_stats}")
 
         db.close()
 
         # 合并统计结果
         combined_stats = {
-            'success': True,
+            'success': not (expiration_stats.get('errors') or duplicate_stats.get('errors')),
+            'dry_run': dry_run,
             'expiration_cleanup': expiration_stats,
             'duplicate_cleanup': duplicate_stats,
             'summary': {
@@ -704,7 +810,17 @@ def import_dat_file_task(dat_file_path: str = None, update_existing: bool = None
             'error': str(e)
         }
 
-# 定期任务：每小时检查待处理文档
+@app.task
+def execute_cleanup_candidate(candidate_id: int):
+    from services.cleanup_service import cleanup_service
+    db = get_db_session()
+    try:
+        return cleanup_service.execute(db, candidate_id)
+    finally:
+        db.close()
+
+
+# 定期任务
 from celery.schedules import crontab
 
 app.conf.beat_schedule = {
@@ -716,12 +832,12 @@ app.conf.beat_schedule = {
     'clean-headquarters-version-duplicates': {
         'task': 'clean_headquarters_version_duplicates',
         'schedule': crontab(hour='2', minute='0'),  # 每天凌晨2点执行
-        'args': (2000,)  # 每次处理2000个文档（确保覆盖所有总行发文，预留增长空间）
+        'args': (2000, None)
     },
     'clean-expired-documents': {
         'task': 'clean_expired_documents',
-        'schedule': crontab(hour='3', minute='0', day_of_week='0'),  # 每周日凌晨3点执行（每7天一次）
-        'args': (2000,)  # 每次处理2000个文档（确保覆盖所有非总行发文，预留增长空间）
+        'schedule': crontab(hour='3', minute='0'),  # 每天轮转检查
+        'args': (2000, 5, None)
     },
     'import-dat-file': {
         'task': 'import_dat_file_task',

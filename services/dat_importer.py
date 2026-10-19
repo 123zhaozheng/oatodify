@@ -8,9 +8,11 @@ import logging
 import os
 from typing import Dict, List, Tuple
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from models import OAFileInfo, BusinessCategory, ProcessingStatus
+from config import settings
 import json
 
 logger = logging.getLogger(__name__)
@@ -63,7 +65,7 @@ class DATImporter:
             # 根据DAT文件的字段顺序解析（需要根据实际情况调整）
             # 第一列不需要，所以所有索引+1
             # 字段顺序为：[跳过], imagefileid, business_category, is_zw, fj_imagefileid,
-            #            imagefilename, imagefiletype, is_zip, filesize, asecode, tokenkey
+            #            imagefilename, imagefiletype, is_zip, filesize, asecode, tokenkey, filerealpath
 
             if len(fields) < 11:
                 logger.warning(f"字段数量不足: {len(fields)} < 11")
@@ -105,6 +107,8 @@ class DATImporter:
                 'filesize': filesize,
                 'asecode': fields[9].strip() if fields[9].strip() else None,
                 'tokenkey': fields[10].strip() if fields[10].strip() else None,
+                'filerealpath': fields[settings.dat_filerealpath_index].strip() or None
+                if len(fields) > settings.dat_filerealpath_index else None,
             }
 
         except Exception as e:
@@ -146,6 +150,9 @@ class DATImporter:
                         ).first()
 
                         if existing_record:
+                            # NAS 迁移只补充来源路径，不重置完成/跳过状态，也不重复入库。
+                            if data.get('filerealpath'):
+                                existing_record.filerealpath = data['filerealpath']
                             if update_existing:
                                 # 更新已存在的记录
                                 for key, value in data.items():
@@ -228,7 +235,7 @@ def _find_previous_day_directory(dat_directory: str) -> Tuple[str, str]:
     if not os.path.isdir(dat_directory):
         raise FileNotFoundError(f"DAT文件根目录不存在: {dat_directory}")
 
-    target_date = (datetime.now() - timedelta(days=1)).date()
+    target_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).date()
     normalized_target = target_date.strftime("%Y%m%d")
 
     matching_directories: List[str] = []

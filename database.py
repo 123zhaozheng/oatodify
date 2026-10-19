@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 # 创建数据库引擎
 engine = create_engine(
     settings.database_url,
-    poolclass=StaticPool,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
+    **({"poolclass": StaticPool} if "sqlite" in settings.database_url else {"pool_pre_ping": True}),
+    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else
+                 ({"connect_timeout": 5} if settings.database_url.startswith("postgresql") else {}),
     echo=settings.debug
 )
 
@@ -23,7 +24,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     """初始化数据库"""
     try:
-        Base.metadata.create_all(bind=engine)
+        import models_operations  # 注册每日任务审计表，也覆盖容器 migrate 启动方式。
+        from schema_migration import migrate_schema
+        migrate_schema(engine)
         logger.info("数据库表创建成功")
     except Exception as e:
         logger.error(f"数据库初始化失败: {e}")

@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -339,11 +340,17 @@ def get_system_snapshot() -> Dict[str, Any]:
     """Aggregate subsystem checks for API consumption."""
     db_status = check_database_connection()
     redis_status = check_redis_connection()
-    s3_status = check_s3_connection()
+    s3_status = check_s3_connection() if settings.storage_backend != "nas" else {"connected": False, "unused": True}
+    nas_status = {
+        "connected": os.path.isdir(settings.nas_root) and os.access(settings.nas_root, os.R_OK | os.X_OK),
+        "root": settings.nas_root, "path_prefix": settings.nas_path_prefix,
+        "backend": settings.storage_backend,
+    }
+    storage_status = s3_status if settings.storage_backend == "s3" else nas_status
     celery_status = check_celery_health()
 
-    healthy_count = sum(1 for item in [db_status, redis_status, s3_status, celery_status] if item.get("connected"))
-    if healthy_count >= 3:
+    healthy_count = sum(1 for item in [db_status, redis_status, storage_status, celery_status] if item.get("connected"))
+    if healthy_count == 4:
         overall = "healthy"
     elif healthy_count >= 1:
         overall = "warning"
@@ -355,6 +362,8 @@ def get_system_snapshot() -> Dict[str, Any]:
         "database": db_status,
         "redis": redis_status,
         "s3": s3_status,
+        "storage": storage_status,
+        "nas": nas_status,
         "celery": celery_status,
         "queue": get_queue_statistics(),
         "recent_errors": get_recent_errors(),

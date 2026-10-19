@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y \
 
 # 复制依赖文件并安装Python依赖
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e .
+RUN python -c "import tomllib, subprocess, sys; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', *deps])"
 
 
 # 复制应用代码

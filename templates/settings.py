@@ -37,7 +37,7 @@ def show_settings():
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🔧 基本配置",
-        "☁️ S3存储",
+        "文件存储",
         "🤖 AI配置",
         "📚 Dify集成",
         "🏥 系统健康",
@@ -166,7 +166,16 @@ def show_basic_settings(system_snapshot: Dict[str, Any], s3_overview: Dict[str, 
 
 def show_s3_settings(system_snapshot: Dict[str, Any], s3_overview: Dict[str, Any]):
     """显示S3存储配置"""
-    st.subheader("☁️ S3存储配置")
+    nas = system_snapshot.get("nas", {})
+    if nas.get("backend") in ("nas", "auto"):
+        st.subheader("NAS 文件存储")
+        render_connection_status("NAS 目录", nas)
+        st.json({"NAS_ROOT": nas.get("root"), "NAS_PATH_PREFIX": nas.get("path_prefix"),
+                 "STORAGE_BACKEND": nas.get("backend")})
+        st.caption("NAS 目录可读状态由 API 容器检查；Worker 也需相同的只读挂载和文件权限。")
+        if nas.get("backend") == "nas":
+            return
+    st.subheader("☁️ S3兼容存储配置")
 
     status = system_snapshot.get("s3", {})
     render_connection_status("S3", status)
@@ -291,7 +300,7 @@ def show_system_health(system_snapshot: Dict[str, Any], s3_overview: Dict[str, A
     services = {
         "API": system_snapshot.get("database", {}),
         "Redis": system_snapshot.get("redis", {}),
-        "S3": system_snapshot.get("s3", {}),
+        "文件存储": system_snapshot.get("storage", system_snapshot.get("s3", {})),
         "Celery": system_snapshot.get("celery", {}),
     }
     service_cols = st.columns(len(services))
@@ -368,8 +377,8 @@ def build_todo_items(system_snapshot: Dict[str, Any], s3_overview: Dict[str, Any
         items.append("检查数据库连接配置和服务状态")
     if not system_snapshot.get("redis", {}).get("connected"):
         items.append("确认Redis服务地址与凭证配置")
-    if not system_snapshot.get("s3", {}).get("connected"):
-        items.append("完善S3存储配置并确保Bucket可访问")
+    if not system_snapshot.get("storage", system_snapshot.get("s3", {})).get("connected"):
+        items.append("检查当前文件存储的挂载目录、路径映射和读取权限")
     if not system_snapshot.get("celery", {}).get("connected"):
         items.append("启动并注册Celery Worker 以处理后台任务")
 

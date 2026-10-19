@@ -455,7 +455,16 @@ class DifyService:
             
             response = self.session.delete(url, timeout=30)
             
-            if response.status_code == 200 or response.status_code == 204:
+            # 必须先确认数据集仍存在，才能把文档 404 当成幂等成功。
+            already_missing = False
+            if response.status_code == 404:
+                dataset_response = self.session.get(
+                    f"{self.base_url}/v1/datasets/{self.dataset_id}", timeout=30
+                )
+                if dataset_response.status_code == 200 and dataset_response.json().get('id') == self.dataset_id:
+                    detail_response = self.session.get(url, timeout=30)
+                    already_missing = detail_response.status_code == 404
+            if response.status_code in (200, 204) or already_missing:
                 logger.info(f"文档删除成功: {document_id} -> {kb_info}")
                 
                 return {
@@ -482,7 +491,19 @@ class DifyService:
                 'success': False,
                 'error': error_msg
             }
-    
+    def get_document_detail(self, document_id: str) -> Dict:
+        if not self.api_key or not self.dataset_id:
+            return {'success': False, 'error': 'Dify 配置不完整'}
+        try:
+            response = self.session.get(
+                f"{self.base_url}/v1/datasets/{self.dataset_id}/documents/{document_id}", timeout=30
+            )
+            if response.status_code == 200:
+                return {'success': True, 'document': response.json()}
+            return {'success': False, 'error': response.text, 'status_code': response.status_code}
+        except Exception as exc:
+            return {'success': False, 'error': str(exc)}
+
 
     def get_dataset_overview(self) -> Dict[str, Any]:
         """Fetch dataset level metadata and document totals."""

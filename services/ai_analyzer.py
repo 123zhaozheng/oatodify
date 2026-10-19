@@ -23,7 +23,7 @@ class DocumentProcessor:
         self.auto_approve_threshold = mapping_config.get('auto_approve_threshold', 90)
         
         # 从环境变量读取JSON输出控制方式
-        self.json_output_method = os.getenv('AI_JSON_OUTPUT_METHOD', 'response_format')  # 'response_format' 或 'prompt'
+        self.json_output_method = settings.ai_json_output_method
     
     def get_prompt(self, content: str, filename: str, file_info: Dict, metadata: Dict) -> str:
         """获取特定分类的AI提示词"""
@@ -270,7 +270,7 @@ class AIAnalyzer:
                 return
             
             # 构建客户端参数
-            client_kwargs = {"api_key": api_key}
+            client_kwargs = {"api_key": api_key, "timeout": settings.ai_request_timeout, "max_retries": 1}
             
             # 如果配置了自定义base_url，则使用自定义URL
             if settings.openai_base_url:
@@ -388,7 +388,7 @@ class AIAnalyzer:
                 ]
                 
                 # 记录AI请求日志
-                logger.info(f"AI分析请求 [文件: {filename}, 分类: {category.value}] - 消息内容: {json.dumps(messages, ensure_ascii=False)}")
+                logger.info(f"AI分析请求 [文件: {filename}, 分类: {category.value}, 字符数: {len(analysis_content)}]")
                 
                 # 根据JSON输出方式调用不同的API
                 if processor.json_output_method == 'response_format':

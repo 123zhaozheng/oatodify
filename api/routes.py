@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, case
 from typing import List, Optional
@@ -9,14 +9,15 @@ import json
 import io
 
 from database import get_db
-from models import OAFileInfo, ProcessingLog, ProcessingStatus, BusinessCategory
+from models import OAFileInfo, ProcessingLog, ProcessingStatus, BusinessCategory, CleanupCandidate, KnowledgeBase
 from tasks.document_processor import (
     process_document,
     batch_process_documents,
     approve_document,
     clean_headquarters_version_duplicates,
     clean_expired_documents,
-    import_dat_file_task
+    import_dat_file_task,
+    execute_cleanup_candidate,
 )
 from services.system_monitor import (
     get_system_snapshot,
@@ -28,6 +29,8 @@ from services.system_monitor import (
     get_queue_statistics as monitor_queue_statistics,
 )
 from services.s3_service import s3_service
+from services.file_storage import file_storage
+from urllib.parse import quote
 from config import settings
 
 router = APIRouter()
@@ -113,6 +116,13 @@ async def get_file_detail(file_id: str, db: Session = Depends(get_db)):
         
         # 获取处理日志
         logs = db.query(ProcessingLog).filter(ProcessingLog.file_id == file_id).order_by(ProcessingLog.created_at.desc()).all()
+        from services.operations import to_shanghai_iso
+        if file_info.dify_dataset_id:
+            target_kb = db.query(KnowledgeBase).filter_by(dify_dataset_id=file_info.dify_dataset_id).first()
+        else:
+            from services.ai_analyzer import ai_analyzer
+            target_kb = ai_analyzer.get_target_knowledge_base(file_info.business_category, db)
+        target_dataset = file_info.dify_dataset_id or (target_kb.dify_dataset_id if target_kb else settings.dify_dataset_id)
         
         detail = {
             "id": file_info.id,
@@ -122,15 +132,24 @@ async def get_file_detail(file_id: str, db: Session = Depends(get_db)):
             "business_category": file_info.business_category.value if file_info.business_category else None,
             "is_zw": file_info.is_zw,
             "is_zip": file_info.is_zip,
+            "filerealpath": file_info.filerealpath,
+            "dify_dataset_id": file_info.dify_dataset_id,
             "filesize": file_info.filesize,
             "processing_status": file_info.processing_status.value,
             "processing_message": file_info.processing_message,
             "ai_confidence_score": file_info.ai_confidence_score,
             "should_add_to_kb": file_info.should_add_to_kb,
             "document_id": file_info.document_id,
-            "created_at": file_info.created_at.isoformat() if file_info.created_at else None,
-            "processing_started_at": file_info.processing_started_at.isoformat() if file_info.processing_started_at else None,
-            "processing_completed_at": file_info.processing_completed_at.isoformat() if file_info.processing_completed_at else None,
+            "parsed_content": file_info.parsed_content or "",
+            "content_length": len(file_info.parsed_content or ""),
+            "target_knowledge_base": {
+                "id": target_kb.id if target_kb else None,
+                "name": target_kb.name if target_kb else ("原入库数据集" if file_info.dify_dataset_id else "默认知识库"),
+                "dataset_id": target_dataset,
+            },
+            "created_at": to_shanghai_iso(file_info.created_at),
+            "processing_started_at": to_shanghai_iso(file_info.processing_started_at),
+            "processing_completed_at": to_shanghai_iso(file_info.processing_completed_at),
             "error_count": file_info.error_count,
             "last_error": file_info.last_error,
             "processing_logs": [
@@ -139,7 +158,7 @@ async def get_file_detail(file_id: str, db: Session = Depends(get_db)):
                     "status": log.status,
                     "message": log.message,
                     "duration_seconds": log.duration_seconds,
-                    "created_at": log.created_at.isoformat()
+                    "created_at": to_shanghai_iso(log.created_at)
                 }
                 for log in logs
             ]
@@ -176,6 +195,8 @@ async def process_file(file_id: str, db: Session = Depends(get_db)):
         if file_info.processing_status in [ProcessingStatus.DOWNLOADING, ProcessingStatus.DECRYPTING, 
                                          ProcessingStatus.PARSING, ProcessingStatus.ANALYZING]:
             raise HTTPException(status_code=400, detail="文档正在处理中，请勿重复提交")
+        if file_info.processing_status not in [ProcessingStatus.PENDING, ProcessingStatus.FAILED]:
+            raise HTTPException(status_code=409, detail="仅待处理或失败的正文可重新处理，已入库文档不会重复上传")
         
         # 重置状态
         file_info.processing_status = ProcessingStatus.PENDING
@@ -398,6 +419,7 @@ async def get_trend_statistics(
 @router.get("/logs/{file_id}", summary="获取文件处理日志")
 async def get_file_logs(file_id: str, db: Session = Depends(get_db)):
     """获取指定文件的处理日志"""
+    from services.operations import to_shanghai_iso
     try:
         logs = db.query(ProcessingLog).filter(
             ProcessingLog.file_id == file_id
@@ -412,7 +434,7 @@ async def get_file_logs(file_id: str, db: Session = Depends(get_db)):
                     "status": log.status,
                     "message": log.message,
                     "duration_seconds": log.duration_seconds,
-                    "created_at": log.created_at.isoformat()
+                    "created_at": to_shanghai_iso(log.created_at)
                 }
                 for log in logs
             ]
@@ -580,12 +602,11 @@ async def download_file(imagefileid: str, db: Session = Depends(get_db)):
         if not file_info:
             raise HTTPException(status_code=404, detail="文件不存在")
 
-        if not file_info.tokenkey:
-            raise HTTPException(status_code=400, detail="文件下载凭证不存在")
-
-        # 从S3下载文件
+        # 与自动处理、人工审核和清理共用统一存储来源。
         try:
-            file_data = s3_service.download_file(file_info.tokenkey)
+            file_data = file_storage.download_file(file_info)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="文件在存储中不存在")
         except PermissionError:
@@ -616,7 +637,7 @@ async def download_file(imagefileid: str, db: Session = Depends(get_db)):
             io.BytesIO(file_data),
             media_type=content_type,
             headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{file_info.imagefilename}",
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(file_info.imagefilename, safe='')}",
                 "Content-Length": str(len(file_data))
             }
         )
@@ -628,7 +649,8 @@ async def download_file(imagefileid: str, db: Session = Depends(get_db)):
 
 @router.post("/maintenance/clean-version-duplicates", summary="手动清理总行发文版本重复")
 async def manual_clean_version_duplicates(
-    limit: int = Query(50, ge=1, le=200, description="每次处理的文档数量限制")
+    limit: int = Query(50, ge=1, le=5000, description="每次处理的文档数量限制"),
+    dry_run: bool = Query(True, description="只生成清理建议，不执行删除"),
 ):
     """
     手动触发总行发文版本去重任务
@@ -639,13 +661,14 @@ async def manual_clean_version_duplicates(
     """
     try:
         # 提交异步任务
-        task = clean_headquarters_version_duplicates.delay(limit)
+        task = clean_headquarters_version_duplicates.delay(limit, dry_run)
 
         return {
             "success": True,
             "message": f"总行发文版本去重任务已提交，限制处理: {limit} 个文档",
             "task_id": task.id,
-            "description": "任务将检测修订文档并清理旧版本，请查看日志了解详细进度"
+            "dry_run": dry_run,
+            "description": "核验原文替代条款并生成待审核建议，版本替换须审核后执行"
         }
 
     except Exception as e:
@@ -654,25 +677,27 @@ async def manual_clean_version_duplicates(
 @router.post("/maintenance/clean-expired-documents", summary="手动清理过期文档和重复文档")
 async def manual_clean_expired_documents(
     limit: int = Query(50, ge=1, le=5000, description="每次处理的文档数量限制"),
-    days: int = Query(5, ge=1, le=30, description="重复文档清理的时间范围（天数），默认5天")
+    days: int = Query(5, ge=1, le=30, description="兼容旧接口；现在轮转扫描全部历史"),
+    dry_run: bool = Query(True, description="只生成清理建议，不执行删除"),
 ):
     """
     手动触发过期文档和重复文档清理任务
 
     - 检查ai_metadata中的expiration_date
     - 对于没有元数据的文档，使用AI判断
-    - 删除过期文档
-    - 增强：清理同前缀重复文档（保留最新的）
+    - 默认只保存建议，核验原文有效期和完整正文重复
+    - 扫描覆盖总行发文及全部历史，版本替换须审核
     """
     try:
         # 提交异步任务
-        task = clean_expired_documents.delay(limit, days)
+        task = clean_expired_documents.delay(limit, days, dry_run)
 
         return {
             "success": True,
             "message": f"过期文档和重复文档清理任务已提交，限制处理: {limit} 个文档，重复检查天数: {days} 天",
             "task_id": task.id,
-            "description": "任务将检查文档有效期并清理过期文档，同时清理同前缀重复文档，请查看日志了解详细进度"
+            "dry_run": dry_run,
+            "description": "轮转扫描有效期及完整正文重复，默认生成待审核建议"
         }
 
     except Exception as e:
@@ -792,3 +817,61 @@ async def get_import_status(db: Session = Depends(get_db)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询导入状态失败: {str(e)}")
+
+
+class CleanupReviewRequest(BaseModel):
+    approved: bool
+    reviewer: str = Field(min_length=1, max_length=200)
+    comment: str = Field(default="", max_length=2000)
+
+
+@router.get("/maintenance/cleanup-candidates", summary="查看清理建议和删除审计")
+def list_cleanup_candidates(
+    status: Optional[str] = Query(None, pattern="^(pending|approved|failed|deleted|rejected|stale)$"),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    from services.operations import to_shanghai_iso
+    query = db.query(CleanupCandidate)
+    if status:
+        query = query.filter(CleanupCandidate.status == status)
+    total = query.count()
+    rows = query.order_by(CleanupCandidate.id.desc()).offset((page - 1) * size).limit(size).all()
+    return {"total": total, "items": [{
+        "id": row.id, "file_id": row.file_id, "document_id": row.document_id,
+        "dataset_id": row.dataset_id, "replacement_file_id": row.replacement_file_id,
+        "kind": row.kind, "status": row.status, "evidence": json.loads(row.evidence),
+        "attempts": row.attempts, "last_error": row.last_error,
+        "reviewed_by": row.reviewed_by, "review_comment": row.review_comment,
+        "created_at": to_shanghai_iso(row.created_at), "executed_at": to_shanghai_iso(row.executed_at),
+        "reviewed_at": to_shanghai_iso(row.reviewed_at),
+    } for row in rows]}
+
+
+@router.post("/maintenance/cleanup-candidates/{candidate_id}/review", summary="审核清理建议")
+def review_cleanup_candidate(candidate_id: int, request: CleanupReviewRequest, db: Session = Depends(get_db)):
+    row = db.query(CleanupCandidate).filter_by(id=candidate_id).with_for_update().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="清理建议不存在")
+    if row.status not in ("pending", "failed", "approved"):
+        raise HTTPException(status_code=409, detail="当前清理建议不能审核")
+    if not request.reviewer.strip():
+        raise HTTPException(status_code=422, detail="审核人不能为空")
+    row.status = "approved" if request.approved else "rejected"
+    row.reviewed_by = request.reviewer.strip()
+    row.review_comment = request.comment
+    row.reviewed_at = datetime.now()
+    db.commit()
+    return {"success": True, "status": row.status, "candidate_id": row.id}
+
+
+@router.post("/maintenance/cleanup-candidates/{candidate_id}/execute", summary="执行或重试已批准的清理")
+def queue_cleanup_execution(candidate_id: int, db: Session = Depends(get_db)):
+    row = db.query(CleanupCandidate).filter_by(id=candidate_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="清理建议不存在")
+    if row.status not in ("approved", "failed") or not row.reviewed_at:
+        raise HTTPException(status_code=409, detail="建议尚未批准或已执行")
+    task = execute_cleanup_candidate.delay(candidate_id)
+    return {"success": True, "task_id": task.id}

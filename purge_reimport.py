@@ -9,6 +9,7 @@
 
 过滤条件按 created_at（入库时间，UTC）计；--to 为闭区间当日。
 --tokenkey-abs 仅作用于 tokenkey 以 / 开头（被写入 NAS 路径）的行。
+--status 仅作用于指定处理状态（如 FAILED），避免误删范围内已成功的行。
 delete 默认预览，加 --yes 才执行；随行删除其 processing_logs；
 cleanup_candidates 属审计记录，默认仅统计，加 --include-cleanup 才一并删除。
 """
@@ -19,7 +20,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, delete
 
 from database import SessionLocal
-from models import OAFileInfo, ProcessingLog, CleanupCandidate
+from models import OAFileInfo, ProcessingLog, CleanupCandidate, ProcessingStatus
 
 BATCH = 500
 
@@ -30,6 +31,12 @@ def build_filters(args):
         filters.append(OAFileInfo.created_at < datetime.fromisoformat(args.to_date) + timedelta(days=1))
     if args.tokenkey_abs:
         filters.append(OAFileInfo.tokenkey.like('/%'))
+    if args.status:
+        try:
+            filters.append(OAFileInfo.processing_status == ProcessingStatus[args.status.upper()])
+        except KeyError:
+            valid = '/'.join(s.name for s in ProcessingStatus)
+            raise SystemExit(f"无效状态 {args.status}，可选: {valid}")
     return filters
 
 
@@ -102,6 +109,7 @@ def main():
     parser.add_argument("--from", dest="from_date", required=True, help="起始入库日期 YYYY-MM-DD（含）")
     parser.add_argument("--to", dest="to_date", help="截止入库日期 YYYY-MM-DD（含，默认至今）")
     parser.add_argument("--tokenkey-abs", action="store_true", help="仅处理 tokenkey 以 / 开头的行")
+    parser.add_argument("--status", help="仅处理指定处理状态的行，如 FAILED（避免误删范围内已成功的行）")
     parser.add_argument("--include-cleanup", action="store_true", help="连同 cleanup_candidates 一并删除")
     parser.add_argument("--yes", action="store_true", help="真正执行删除（默认只预览）")
     parser.add_argument("--sample", type=int, default=10, help="样例行数，默认 10")

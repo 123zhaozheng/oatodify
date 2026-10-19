@@ -86,7 +86,7 @@ start_celery_worker() {
         --loglevel=info \
         --concurrency=2 \
         --max-tasks-per-child=1000 \
-        --queues=document_processing,batch_processing
+        --queues=document_processing,batch_processing,data_import
 }
 
 # 启动 Celery Beat (定时任务调度器)
@@ -105,16 +105,10 @@ start_celery_flower() {
         --port=5555
 }
 
-# # 运行数据库迁移
-# run_migrations() {
-#     echo "📊 运行数据库迁移..."
-#     python -c "
-# from database import init_db
-# print('初始化数据库...')
-# init_db()
-# print('✅ 数据库初始化完成')
-#     "
-# }
+# 运行数据库迁移
+run_migrations() {
+    python schema_migration.py
+}
 
 # 显示帮助信息
 show_help() {
@@ -163,10 +157,8 @@ main() {
     # 根据命令执行相应操作
     case "$command" in
         "fastapi")
-            if [[ "${SKIP_HEALTH_CHECK:-false}" != "true" ]]; then
-                wait_for_services
-            fi
-            # run_migrations
+            # 静态页面和共享文件配置无需 Redis；依赖异常由页面如实展示。
+            # 数据库初始化由 FastAPI lifespan 执行，失败仍允许修正配置。
             start_fastapi
             ;;
         "streamlit")

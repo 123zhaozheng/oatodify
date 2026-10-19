@@ -119,6 +119,15 @@ class OAFileInfo(Base):
     filesize = Column(Integer, comment="文件大小（字节）")
     asecode = Column(String(255), comment="OSS下载解密code")
     tokenkey = Column(String(500), comment="OSS下载key")
+    filerealpath = Column(Text, comment="OA提供的NAS文件绝对路径")
+    parsed_content = Column(Text, comment="完整解析正文，供审核及清理复核")
+    content_sha256 = Column(String(64), index=True, comment="完整解析正文的SHA256")
+    lifecycle_analysis = Column(Text, comment="有效期分析缓存及原文依据")
+    dify_dataset_id = Column(String(100), comment="入库时的数据集ID，不随分类映射改变")
+    knowledge_base_id = Column(Integer, comment="入库时知识库配置ID")
+    expiration_checked_at = Column(DateTime, index=True)
+    version_checked_at = Column(DateTime, index=True)
+    duplicate_checked_at = Column(DateTime, index=True)
     
     # 处理状态
     processing_status = Column(SQLEnum(ProcessingStatus), default=ProcessingStatus.PENDING, 
@@ -167,3 +176,25 @@ class ProcessingLog(Base):
     
     def __repr__(self):
         return f"<ProcessingLog(file_id={self.file_id}, step={self.step}, status={self.status})>"
+
+
+class CleanupCandidate(Base):
+    """清理建议及执行审计；删除后仍保留原 Dify ID 和依据。"""
+    __tablename__ = "cleanup_candidates"
+    id = Column(Integer, primary_key=True)
+    unique_key = Column(String(64), unique=True, nullable=False)
+    file_id = Column(String(100), nullable=False, index=True)
+    document_id = Column(String(100), nullable=False)
+    dataset_id = Column(String(100), nullable=False)
+    replacement_file_id = Column(String(100))
+    replacement_document_id = Column(String(100))
+    kind = Column(String(30), nullable=False)
+    evidence = Column(Text, nullable=False)
+    status = Column(String(20), default="pending", nullable=False, index=True)
+    attempts = Column(Integer, default=0, nullable=False)
+    last_error = Column(Text)
+    reviewed_by = Column(String(200))
+    review_comment = Column(Text)
+    reviewed_at = Column(DateTime)
+    executed_at = Column(DateTime)
+    created_at = Column(DateTime, default=func.now(), nullable=False)

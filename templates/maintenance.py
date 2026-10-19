@@ -22,7 +22,7 @@ def show_maintenance():
     """)
 
     # 创建两个标签页
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 版本去重", "🗑️ 过期清理", "📥 数据导入", "📊 任务监控"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 版本去重", "🗑️ 过期清理", "📥 数据导入", "📊 任务监控", "清理审核与审计"])
 
     with tab1:
         show_version_cleanup_tab()
@@ -36,6 +36,9 @@ def show_maintenance():
     with tab4:
         show_task_monitor_tab()
 
+    with tab5:
+        show_cleanup_review_tab()
+
 
 def show_version_cleanup_tab():
     """显示版本去重标签页"""
@@ -48,7 +51,7 @@ def show_version_cleanup_tab():
     1. 🔍 检测文档名中的修订关键词（修订、修改、更新、废止等）
     2. 📝 提取《》中的标题进行模糊匹配
     3. 🤖 使用AI分析文档版本号（如：昆农商发【2025】xxx号）
-    4. 🗑️ 删除旧版本，保留最新版本
+    4. 保存明确替代条款，审核后执行，执行时确认新文档索引可用
 
     ### 当前设置
     """)
@@ -83,18 +86,15 @@ def show_version_cleanup_tab():
     with col2:
         st.write("")  # 占位
         st.write("")  # 占位
-        dry_run = st.checkbox("预览模式", value=False, help="不实际删除，仅显示会删除的文档")
+        dry_run = st.checkbox("预览模式", value=True, help="不实际删除，仅显示会删除的文档")
 
     with col3:
         st.write("")  # 占位
         st.write("")  # 占位
 
     if st.button("🚀 开始清理", key="start_version_cleanup", type="primary", use_container_width=True):
-        if dry_run:
-            st.warning("⚠️ 预览模式暂未实现，将直接执行清理操作")
-
         with st.spinner("正在提交清理任务..."):
-            result = trigger_clean_version_duplicates(limit)
+            result = trigger_clean_version_duplicates(limit, dry_run)
 
             if result.get('success'):
                 st.success(f"✅ {result.get('message')}")
@@ -130,15 +130,15 @@ def show_expired_cleanup_tab():
     自动检查和清理过期文档及重复文档：
 
     **过期文档清理：**
-    1. 📅 检查ai_metadata中的expiration_date字段
-    2. ⏰ 对比当前日期判断是否过期
-    3. 🤖 如果没有元数据，使用AI判断有效期
-    4. 🗑️ 删除已过期的文档
+    1. 按检查时间轮转扫描全部历史文档，包括总行发文
+    2. 模型提取明确的全文失效日期及原文依据
+    3. 核验引用、置信度和北京时间，失效当天仍有效
+    4. 默认生成清理建议，在清理审核与审计页执行
 
     **重复文档清理（增强）：**
-    5. 🔍 查询指定天数内完成的文档
-    6. 📝 通过文件名前缀匹配查找重复文档
-    7. 🧹 保留最新版本，删除旧版本
+    5. 轮转扫描全部历史文件
+    6. 核对同数据集、同分类的完整正文 SHA256
+    7. 内容一致才建议去重，确认保留文档索引可用后执行
 
     ### 当前设置
     """)
@@ -146,8 +146,8 @@ def show_expired_cleanup_tab():
     col1, col2 = st.columns(2)
 
     with col1:
-        st.info("**定时任务**: 每周日凌晨3点自动执行（每7天一次）")
-        st.info("**默认处理**: 50个文档/次，重复检查5天")
+        st.info("**定时任务**: 每天凌晨3点轮转扫描")
+        st.info("**默认处理**: 50个文档/次，轮转覆盖全部历史")
 
     with col2:
         st.success("**永久有效标识**")
@@ -173,26 +173,23 @@ def show_expired_cleanup_tab():
 
     with col2:
         days = st.slider(
-            "重复检查天数",
+            "旧接口兼容参数（天）",
             min_value=1,
             max_value=30,
             value=5,
             step=1,
-            help="查询最近多少天内完成的文档进行重复检查",
+            help="仅保留旧接口参数兼容，实际轮转覆盖全部历史",
             key="duplicate_days"
         )
 
     with col3:
         st.write("")  # 占位
         st.write("")  # 占位
-        dry_run = st.checkbox("预览模式", value=False, help="不实际删除，仅显示会删除的文档", key="expired_dry_run")
+        dry_run = st.checkbox("预览模式", value=True, help="不实际删除，仅显示会删除的文档", key="expired_dry_run")
 
     if st.button("🚀 开始清理", key="start_expired_cleanup", type="primary", use_container_width=True):
-        if dry_run:
-            st.warning("⚠️ 预览模式暂未实现，将直接执行清理操作")
-
         with st.spinner("正在提交清理任务..."):
-            result = trigger_clean_expired_documents(limit, days)
+            result = trigger_clean_expired_documents(limit, days, dry_run)
 
             if result.get('success'):
                 st.success(f"✅ {result.get('message')}")
@@ -534,11 +531,11 @@ def show_task_monitor_tab():
 
 
 # API调用函数
-def trigger_clean_version_duplicates(limit=50):
+def trigger_clean_version_duplicates(limit=50, dry_run=True):
     """触发版本去重清理"""
     try:
-        base_url = get_files_api_url("").rstrip('/files/')
-        url = f"{base_url}/maintenance/clean-version-duplicates?limit={limit}"
+        base_url = get_files_api_url("").removesuffix('/files/').removesuffix('/files')
+        url = f"{base_url}/maintenance/clean-version-duplicates?limit={limit}&dry_run={str(dry_run).lower()}"
         response = requests.post(url, timeout=10)
         response.raise_for_status()
         return response.json()
@@ -548,11 +545,11 @@ def trigger_clean_version_duplicates(limit=50):
         return {'success': False, 'error': str(e)}
 
 
-def trigger_clean_expired_documents(limit=50, days=5):
+def trigger_clean_expired_documents(limit=50, days=5, dry_run=True):
     """触发过期文档和重复文档清理"""
     try:
-        base_url = get_files_api_url("").rstrip('/files/')
-        url = f"{base_url}/maintenance/clean-expired-documents?limit={limit}&days={days}"
+        base_url = get_files_api_url("").removesuffix('/files/').removesuffix('/files')
+        url = f"{base_url}/maintenance/clean-expired-documents?limit={limit}&days={days}&dry_run={str(dry_run).lower()}"
         response = requests.post(url, timeout=10)
         response.raise_for_status()
         return response.json()
@@ -565,7 +562,7 @@ def trigger_clean_expired_documents(limit=50, days=5):
 def check_task_status(task_id):
     """查询任务状态"""
     try:
-        base_url = get_files_api_url("").rstrip('/files/')
+        base_url = get_files_api_url("").removesuffix('/files/').removesuffix('/files')
         url = f"{base_url}/maintenance/task-status/{task_id}"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -581,7 +578,7 @@ def check_task_status(task_id):
 def trigger_import_dat_file(params):
     """触发DAT文件导入"""
     try:
-        base_url = get_files_api_url("").rstrip('/files/')
+        base_url = get_files_api_url("").removesuffix('/files/').removesuffix('/files')
         url = f"{base_url}/data/import-dat"
         response = requests.post(url, json=params, timeout=10)
         response.raise_for_status()
@@ -595,7 +592,7 @@ def trigger_import_dat_file(params):
 def get_import_status():
     """获取导入状态统计"""
     try:
-        base_url = get_files_api_url("").rstrip('/files/')
+        base_url = get_files_api_url("").removesuffix('/files/').removesuffix('/files')
         url = f"{base_url}/data/import-status"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -606,3 +603,43 @@ def get_import_status():
     except Exception as e:
         st.error(f"获取失败: {str(e)}")
         return None
+
+
+def show_cleanup_review_tab():
+    st.header("清理审核与审计")
+    st.caption("预览任务只生成建议。审核后单独执行；执行失败会保留文档关联，可重试。")
+    status = st.selectbox("状态", ["pending", "approved", "failed", "deleted", "rejected", "stale"])
+    page = st.number_input("页码", min_value=1, value=1, step=1)
+    base_url = get_files_api_url("").removesuffix("/files/").removesuffix("/files")
+    try:
+        response = requests.get(f"{base_url}/maintenance/cleanup-candidates",
+                                params={"status": status, "page": page, "size": 20}, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        st.write(f"共 {result['total']} 条")
+        for row in result['items']:
+            with st.expander(f"#{row['id']} · {row['kind']} · {row['file_id']} · {row['status']}"):
+                st.write({"原文档": row['document_id'], "数据集": row['dataset_id'],
+                          "保留文件": row['replacement_file_id'], "审核人": row['reviewed_by']})
+                st.json(row['evidence'])
+                if row['last_error']:
+                    st.error(row['last_error'])
+                if row['status'] in ("pending", "failed", "approved"):
+                    with st.form(f"review_{row['id']}"):
+                        reviewer = st.text_input("审核人", key=f"reviewer_{row['id']}")
+                        comment = st.text_input("审核意见", key=f"comment_{row['id']}")
+                        approved = st.radio("结论", ["批准", "拒绝"], key=f"decision_{row['id']}")
+                        if st.form_submit_button("保存审核"):
+                            reviewed = requests.post(
+                                f"{base_url}/maintenance/cleanup-candidates/{row['id']}/review",
+                                json={"approved": approved == "批准", "reviewer": reviewer, "comment": comment}, timeout=10)
+                            reviewed.raise_for_status()
+                            st.rerun()
+                if row['status'] in ("approved", "failed") and row['reviewed_by']:
+                    if st.button("执行删除 / 重试", key=f"execute_{row['id']}"):
+                        execution = requests.post(
+                            f"{base_url}/maintenance/cleanup-candidates/{row['id']}/execute", timeout=10)
+                        execution.raise_for_status()
+                        st.success(f"已提交执行任务：{execution.json()['task_id']}")
+    except requests.RequestException as exc:
+        st.error(f"清理建议接口请求失败：{exc}")

@@ -115,3 +115,11 @@ yarn-error.log*
 
 # 其他
 *.orig
+
+# 所有实际凭证文件均只在运行时提供
+.env
+.env.*
+!.env.example
+
+# 合并工具包（含截图），不进镜像
+patch/

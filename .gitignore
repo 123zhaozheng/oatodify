@@ -46,7 +46,8 @@ debug.log
 # ---- 环境变量文件 ----
 .env
 .env.*
-!.env.example  # 可以保留示例环境文件
+# 可以保留示例环境文件（gitignore 不支持行内注释，必须单独一行）
+!.env.example
 
 # ---- 单元测试与覆盖率 ----
 htmlcov/

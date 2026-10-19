@@ -80,11 +80,11 @@ class S3Service:
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'NoSuchKey':
-                logger.error(f"文件不存在: {file_key}")
-                raise FileNotFoundError(f"文件不存在: {file_key}")
+                logger.error(f"文件不存在: {token_key}")
+                raise FileNotFoundError(f"文件不存在: {token_key}")
             elif error_code == 'AccessDenied':
-                logger.error(f"访问被拒绝: {file_key}")
-                raise PermissionError(f"访问被拒绝: {file_key}")
+                logger.error(f"访问被拒绝: {token_key}")
+                raise PermissionError(f"访问被拒绝: {token_key}")
             else:
                 logger.error(f"S3下载错误 {error_code}: {e}")
                 raise
